@@ -417,7 +417,7 @@ find_substitute_face(CFStringRef str, CTFontRef old_font, CPUCell *cpu_cell) {
  * @param base_face 基準CTFace
  * @param cell CPUセル
  * @param bold ボールド
- * @param bold イタリック
+ * @param italic イタリック
  * @param emoji_presentation 絵文字
  * @param fg フォントデータハンドル
  * @return CTFaceのPyObject
@@ -942,7 +942,7 @@ render_simple_text_impl(PyObject *s, const char *text, unsigned int baseline) {
  *
  * @param ct_font CTFontオブジェクト
  * @param bold ボールド
- * @param bold イタリック
+ * @param italic イタリック
  * @param info HarfBuzzグリフ情報
  * @param hb_positions HarfBuzz位置情報
  * @param num_glyphs グリフの数
@@ -1052,7 +1052,7 @@ do_render(CTFontRef ct_font,
  *
  * @param s CTFaceオブジェクト
  * @param bold ボールド
- * @param bold イタリック
+ * @param italic イタリック
  * @param info HarfBuzzグリフ情報
  * @param hb_positions HarfBuzz位置情報
  * @param num_glyphs グリフの数

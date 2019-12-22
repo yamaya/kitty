@@ -1,6 +1,14 @@
 #pragma once
 #include "data-types.h"
+
+/**
+ * 異体字セレクタ(Variation Selector) 15
+ */
 #define VS15 1280
+
+/**
+ * 異体字セレクタ(Variation Selector) 16
+ */
 #define VS16 1281
 
 bool is_combining_char(char_type ch);
@@ -25,7 +33,15 @@ can_strip_from_end_of_url(uint32_t ch) {
     ) ? true : false;
 }
 
+/**
+ * コードポイントが私的利用領域か判定する
+ *
+ * @param ch 文字コード
+ * @return 私的利用領域なら真
+ */
 static inline bool
 is_private_use(char_type ch) {
-    return (0xe000 <= ch && ch <= 0xf8ff) || (0xF0000 <= ch && ch <= 0xFFFFF) || (0x100000 <= ch && ch <= 0x10FFFF);
+    return (0xe000 <= ch && ch <= 0xf8ff) ||
+           (0xF0000 <= ch && ch <= 0xFFFFF) ||
+           (0x100000 <= ch && ch <= 0x10FFFF);
 }
