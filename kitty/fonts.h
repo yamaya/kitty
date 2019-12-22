@@ -13,9 +13,12 @@
 #include <hb.h>
 #pragma GCC diagnostic pop
 
+/**
+ * 文字列キャンバス
+ */
 typedef struct {
-    uint8_t *canvas;
-    size_t width, height;
+    uint8_t *canvas;    /** バイト配列 */
+    size_t width, height;   /** 幅と高さ */
 } StringCanvas;
 
 // API that font backends need to implement
