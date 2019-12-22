@@ -937,6 +937,26 @@ render_simple_text_impl(PyObject *s, const char *text, unsigned int baseline) {
     return ans;
 }
 
+/**
+ * レンダリングする
+ *
+ * @param ct_font CTFontオブジェクト
+ * @param bold ボールド
+ * @param bold イタリック
+ * @param info HarfBuzzグリフ情報
+ * @param hb_positions HarfBuzz位置情報
+ * @param num_glyphs グリフの数
+ * @param canvas キャンバス(?)
+ * @param cell_width セルの幅
+ * @param cell_height セルの高さ
+ * @param num_cells セルの個数
+ * @param baseline ベースライン
+ * @param was_colored 色付けされたか否か
+ * @param allow_resize リサイズを許すか否か
+ * @param fg フォントデータハンドル
+ * @param center_glyph レンダリング位置を中央にする
+ * @return レンダリング出来たら真 ... だけどこの実装は真固定で返してる
+ */
 static inline bool
 do_render(CTFontRef ct_font,
           bool bold,
@@ -953,15 +973,22 @@ do_render(CTFontRef ct_font,
           bool allow_resize,
           FONTS_DATA_HANDLE fg,
           bool center_glyph) {
-    unsigned int canvas_width = cell_width * num_cells;
-    CGRect br = CTFontGetBoundingRectsForGlyphs(ct_font, kCTFontOrientationHorizontal, glyphs, boxes, num_glyphs);
+    // キャンバスの幅を求める
+    const unsigned int canvas_width = cell_width * num_cells;
+
+    // グリフ群を囲む矩形を求める
+    const CGRect br = CTFontGetBoundingRectsForGlyphs(ct_font, kCTFontOrientationHorizontal, glyphs, boxes, num_glyphs);
 
     if (allow_resize) {
-        // Resize glyphs that would bleed into neighboring cells, by scaling the font size
-        float right = 0;
+        /*
+         * フォントサイズを拡大縮小して、隣接するセルににじむ(?)グリフのサイズを変更します
+         */
+        float right = 0; // グリフの最右座標
         for (unsigned i = 0; i < num_glyphs; i++) {
             right = MAX(right, boxes[i].origin.x + boxes[i].size.width);
         }
+        // グリフの最右がキャンパスをはみ出す場合、フォントサイズを小さくして
+        // `do_render` を再実行する
         if (!bold && !italic && right > canvas_width + 1) {
             CGFloat sz = CTFontGetSize(ct_font);
             sz *= canvas_width / right;
@@ -980,34 +1007,65 @@ do_render(CTFontRef ct_font,
                                  was_colored,
                                  false,
                                  fg,
-                                 center_glyph);
+                                 center_glyph); // 再帰だよ
             CFRelease(new_font);
             return ret;
         }
     }
+
+    // staticな位置配列を HarfBuzz位置情報で更新する
     for (unsigned i = 0; i < num_glyphs; i++) {
         positions[i].x = MAX(0, -boxes[i].origin.x) + hb_positions[i].x_offset / 64.f;
         positions[i].y = hb_positions[i].y_offset / 64.f;
     }
+
+    // 色付けグリフかどうかでレンダリング処理を変更する
     if (*was_colored) {
         render_color_glyph(ct_font, (uint8_t *)canvas, info[0].codepoint, cell_width * num_cells, cell_height, baseline);
     }
     else {
         ensure_render_space(canvas_width, cell_height);
         render_glyphs(ct_font, canvas_width, cell_height, baseline, num_glyphs);
-        Region src = {.bottom = cell_height, .right = canvas_width}, dest = {.bottom = cell_height, .right = canvas_width};
+        const Region src = {
+            .bottom = cell_height,
+            .right = canvas_width
+        };
+        const Region dest = src;
         render_alpha_mask(render_buf, canvas, &src, &dest, canvas_width, canvas_width);
     }
+
+    // セルから求めた幅がバウンディング矩形より大きい場合、グリフ群をセンタリングする
     if (num_cells > 1) {
-        // center glyphs
         CGFloat delta = canvas_width - br.size.width;
         if (delta > 1) {
             right_shift_canvas(canvas, canvas_width, cell_height, (unsigned)(delta / 2.f));
         }
     }
     return true;
-} /* do_render */
+}
 
+/**
+ * セルをレンダリングする
+ *
+ *  HarfBuzz位置情報 `info` にコードポイントが含まれておりそれをレンダリングす
+ *  る。なお `info` は配列で件数は `num_glyphs` である( `num_cells` じゃないんか... )。
+ *
+ * @param s CTFaceオブジェクト
+ * @param bold ボールド
+ * @param bold イタリック
+ * @param info HarfBuzzグリフ情報
+ * @param hb_positions HarfBuzz位置情報
+ * @param num_glyphs グリフの数
+ * @param canvas キャンバス(?)
+ * @param cell_width セルの幅
+ * @param cell_height セルの高さ
+ * @param num_cells セルの個数
+ * @param baseline ベースライン
+ * @param was_colored 色付けされたか否か
+ * @param fg フォントデータハンドル
+ * @param center_glyph レンダリング位置を中央にする
+ * @return レンダリング出来たら真 ... だけどこの実装は真固定で返してる
+ */
 bool
 render_glyphs_in_cells(PyObject *s,
                        bool bold,
@@ -1025,6 +1083,7 @@ render_glyphs_in_cells(PyObject *s,
                        bool center_glyph) {
     CTFace *self = (CTFace *)s;
 
+    // HarfBuzzグリフをstatic配列にコピーする
     for (unsigned i = 0; i < num_glyphs; i++) {
         glyphs[i] = info[i].codepoint;
     }
@@ -1043,7 +1102,7 @@ render_glyphs_in_cells(PyObject *s,
                      true,
                      fg,
                      center_glyph);
-} /* render_glyphs_in_cells */
+}
 
 // Boilerplate {{{
 
@@ -1086,8 +1145,7 @@ repr(CTFace *self) {
              (self->underline_thickness));
     return PyUnicode_FromFormat(
         "Face(family=%U, full_name=%U, postscript_name=%U, path=%U, units_per_em=%u, %s)",
-        self->family_name, self->full_name, self->postscript_name, self->path, self->units_per_em, buf
-        );
+        self->family_name, self->full_name, self->postscript_name, self->path, self->units_per_em, buf);
 }
 
 static PyMethodDef module_methods[] = {
