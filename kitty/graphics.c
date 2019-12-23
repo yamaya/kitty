@@ -973,8 +973,8 @@ gpu_data_for_centered_image(
  * @param scrolled_by TODO: 謎
  * @param screen_left スクリーンのx座標
  * @param screen_top スクリーンのy座標
- * @param dx セル幅 TODO: だと思う
- * @param dy セル高 TODO: だと思う
+ * @param dx セル幅 TODO: OpenGL座標系でのセル幅っぽい
+ * @param dy セル高 TODO: OpenGL座標系でのセル高さっぽい
  * @param num_cols 列数
  * @param num_rows 行数
  * @param cell セルのピクセルサイズ
@@ -1316,7 +1316,7 @@ grman_rescale(GraphicsManager *self, CellPixelSize cell) {
 }
 
 /**
- * GraphicsManagerのレイヤーのコマンドを処理する TODO: ホントか？
+ * グラフィックコマンドを捌く
  *
  * @param self GraphicsManagerオブジェクト
  * @param g GraphicsCommandオブジェクト

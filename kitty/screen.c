@@ -50,8 +50,17 @@ init_tabstops(bool *tabstops, index_type count) {
     }
 }
 
+/**
+ * オーバーレイ行の初期化
+ *  TODO: 何だろう？デバッグ用の行？
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] columns 列数
+ * @return 成功したら真
+ */
 static inline bool
 init_overlay_line(Screen *self, index_type columns) {
+    // オーバーレイ用のCPUセルとGPUセルを列数分再確保する
     PyMem_Free(self->overlay_line.cpu_cells);
     PyMem_Free(self->overlay_line.gpu_cells);
     self->overlay_line.cpu_cells = PyMem_Calloc(columns, sizeof(CPUCell));
@@ -67,6 +76,9 @@ init_overlay_line(Screen *self, index_type columns) {
     return true;
 }
 
+/**
+ * ESCシーケンにおけるリセット文字を設定する
+ */
 #define RESET_CHARSETS \
     self->g0_charset = translation_table(0); \
     self->g1_charset = self->g0_charset; \
@@ -75,12 +87,28 @@ init_overlay_line(Screen *self, index_type columns) {
     self->utf8_state = 0; \
     self->utf8_codepoint = 0; \
     self->use_latin1 = false;
+
+/**
+ * Pythonインターフェイス上のコールバックを呼び出す
+ *
+ * \param[in] vargs コールバックに渡す引数
+ */
 #define CALLBACK(...) \
     if (self->callbacks != Py_None) { \
         PyObject *callback_ret = PyObject_CallMethod(self->callbacks, __VA_ARGS__); \
-        if (callback_ret == NULL) PyErr_Print(); else Py_DECREF(callback_ret); \
+        if (!callback_ret) \
+            PyErr_Print(); \
+        else \
+            Py_DECREF(callback_ret); \
     }
 
+/**
+ * Screenオブジェクトのコンストラクタ
+ *
+ * \param[in] type 何？
+ * \param[in] args 引数
+ * \param[in] kwds 未使用
+ */
 static PyObject *
 new(PyTypeObject *type, PyObject *args, PyObject UNUSED *kwds) {
     Screen *self;
@@ -89,18 +117,28 @@ new(PyTypeObject *type, PyObject *args, PyObject UNUSED *kwds) {
     unsigned int columns = 80, lines = 24, scrollback = 0, cell_width = 10, cell_height = 20;
     id_type window_id = 0;
 
-    if (!PyArg_ParseTuple(args, "|OIIIIIKO", &callbacks, &lines, &columns, &scrollback, &cell_width, &cell_height, &window_id,
-                          &test_child)) {
+    if (!PyArg_ParseTuple(args, "|OIIIIIKO",
+            &callbacks,
+            &lines,
+            &columns,
+            &scrollback,
+            &cell_width,
+            &cell_height,
+            &window_id,
+            &test_child)) {
         return NULL;
     }
 
     self = (Screen *)type->tp_alloc(type, 0);
     if (self != NULL) {
+        // バッファ読み込み用のミューテックスを用意する
         if ((ret = pthread_mutex_init(&self->read_buf_lock, NULL)) != 0) {
             Py_CLEAR(self);
             PyErr_Format(PyExc_RuntimeError, "Failed to create Screen read_buf_lock mutex: %s", strerror(ret));
             return NULL;
         }
+
+        // バッファ書き込み用のミューテックスを用意する
         if ((ret = pthread_mutex_init(&self->write_buf_lock, NULL)) != 0) {
             Py_CLEAR(self);
             PyErr_Format(PyExc_RuntimeError, "Failed to create Screen write_buf_lock mutex: %s", strerror(ret));
@@ -110,13 +148,16 @@ new(PyTypeObject *type, PyObject *args, PyObject UNUSED *kwds) {
         self->cell_size.height = cell_height;
         self->columns = columns;
         self->lines = lines;
+
+        // 書き込みバッファの確保
         self->write_buf = PyMem_RawMalloc(BUFSIZ);
         self->window_id = window_id;
-        if (self->write_buf == NULL) {
+        if (!self->write_buf) {
             Py_CLEAR(self);
             return PyErr_NoMemory();
         }
         self->write_buf_sz = BUFSIZ;
+
         self->modes = empty_modes;
         self->is_dirty = true;
         self->scroll_changed = false;
@@ -140,8 +181,8 @@ new(PyTypeObject *type, PyObject *args, PyObject UNUSED *kwds) {
         self->pending_mode.wait_time = 2.0;
         self->disable_ligatures = OPT(disable_ligatures);
         self->main_tabstops = PyMem_Calloc(2 * self->columns, sizeof(bool));
-        if (self->cursor == NULL || self->main_linebuf == NULL || self->alt_linebuf == NULL || self->main_tabstops == NULL ||
-            self->historybuf == NULL || self->main_grman == NULL || self->alt_grman == NULL || self->color_profile == NULL) {
+        if (!self->cursor || !self->main_linebuf || !self->alt_linebuf || !self->main_tabstops ||
+            !self->historybuf || !self->main_grman || !self->alt_grman || !self->color_profile) {
             Py_CLEAR(self);
             return NULL;
         }
@@ -155,7 +196,7 @@ new(PyTypeObject *type, PyObject *args, PyObject UNUSED *kwds) {
         }
     }
     return (PyObject *)self;
-} /* new */
+}
 
 static void deactivate_overlay_line(Screen *self);
 static inline Line * range_line_(Screen *self, int y);
@@ -198,6 +239,9 @@ screen_reset(Screen *self) {
     self->parser_has_pending_text = false;
 } /* screen_reset */
 
+/**
+ * 行をdirtyにマークする
+ */
 void
 screen_dirty_sprite_positions(Screen *self) {
     self->is_dirty = true;
@@ -205,44 +249,79 @@ screen_dirty_sprite_positions(Screen *self) {
         linebuf_mark_line_dirty(self->main_linebuf, i);
         linebuf_mark_line_dirty(self->alt_linebuf, i);
     }
+
+    // ヒストリバッファもdirtyにマーク
     for (index_type i = 0; i < self->historybuf->count; i++) {
         historybuf_mark_line_dirty(self->historybuf, i);
     }
 }
 
+/**
+ * ヒストリバッファの再確保
+ *
+ * \param[in] old ヒストリバッファ
+ * \param[in] lines 行数
+ * \param[in] columns 列数
+ * \return ヒストリバッファ
+ */
 static inline HistoryBuf *
 realloc_hb(HistoryBuf *old, unsigned int lines, unsigned int columns) {
+    // 新しく確保してコピーする
     HistoryBuf *ans = alloc_historybuf(lines, columns, 0);
-
-    if (ans == NULL) {
+    if (!ans) {
         PyErr_NoMemory();
         return NULL;
     }
+
     ans->pagerhist = old->pagerhist;
     old->pagerhist = NULL;
     historybuf_rewrap(old, ans);
     return ans;
 }
 
+/**
+ * 行バッファの再確保
+ *
+ * \param[in] old 行バッファ
+ * \param[in] lines 行数
+ * \param[in] columns 列数
+ * \param[in] nclb TODO ？
+ * \param[in] ncla TODO ？
+ * \param[in] hb ヒストリバッファ
+ * \param[in] x x座標 TODO: なんの座標？
+ * \param[in] y y座標
+ * \return 行バッファ
+ */
 static inline LineBuf *
-realloc_lb(LineBuf *old,
-           unsigned int lines,
-           unsigned int columns,
-           index_type *nclb,
-           index_type *ncla,
-           HistoryBuf *hb,
-           index_type *x,
-           index_type *y){
+realloc_lb(
+    LineBuf *old,
+    unsigned int lines,
+    unsigned int columns,
+    index_type *nclb,
+    index_type *ncla,
+    HistoryBuf *hb,
+    index_type *x,
+    index_type *y
+) {
+    // 新しく確保してコピーする
     LineBuf *ans = alloc_linebuf(lines, columns);
-
-    if (ans == NULL) {
+    if (!ans) {
         PyErr_NoMemory();
         return NULL;
     }
+
     linebuf_rewrap(old, ans, nclb, ncla, hb, x, y);
     return ans;
 }
 
+/**
+ * スクリーンのリサイズ
+ *
+ * \param self スクリーン
+ * \param[in] lines 行数
+ * \param[in] columns 列数
+ * \return リサイズしたら真
+ */
 static bool
 screen_resize(Screen *self, unsigned int lines, unsigned int columns) {
     if (self->overlay_line.is_active) {
@@ -260,12 +339,12 @@ screen_resize(Screen *self, unsigned int lines, unsigned int columns) {
         cursor_is_beyond_content = num_content_lines_before > 0 && self->cursor->y >= num_content_lines_before; \
         num_content_lines = num_content_lines_after; \
 }
-    // Resize overlay line
+    // オーバーレイ行のリサイズ
     if (!init_overlay_line(self, columns)) {
         return false;
     }
 
-    // Resize main linebuf
+    // メイン行バッファのリサイズ
     HistoryBuf *nh = realloc_hb(self->historybuf, self->historybuf->ynum, columns);
     if (nh == NULL) {
         return false;
@@ -281,7 +360,7 @@ screen_resize(Screen *self, unsigned int lines, unsigned int columns) {
                             self->historybuf,
                             &x,
                             &y);
-    if (n == NULL) {
+    if (!n) {
         return false;
     }
     Py_CLEAR(self->main_linebuf);
@@ -291,10 +370,10 @@ screen_resize(Screen *self, unsigned int lines, unsigned int columns) {
     }
     grman_resize(self->main_grman, self->lines, lines, self->columns, columns);
 
-    // Resize alt linebuf
+    // もう一方の行バッファもリサイズ
     x = self->cursor->x, y = self->cursor->y;
     n = realloc_lb(self->alt_linebuf, lines, columns, &num_content_lines_before, &num_content_lines_after, NULL, &x, &y);
-    if (n == NULL) {
+    if (!n) {
         return false;
     }
     Py_CLEAR(self->alt_linebuf);
@@ -306,15 +385,15 @@ screen_resize(Screen *self, unsigned int lines, unsigned int columns) {
 #undef setup_cursor
 
     self->linebuf = is_main ? self->main_linebuf : self->alt_linebuf;
-    /* printf("\nold_size: (%u, %u) new_size: (%u, %u)\n", self->columns, self->lines, columns, lines); */
     self->lines = lines;
     self->columns = columns;
     self->margin_top = 0;
     self->margin_bottom = self->lines - 1;
 
+    // タブストップ配列？も再確保する
     PyMem_Free(self->main_tabstops);
     self->main_tabstops = PyMem_Calloc(2 * self->columns, sizeof(bool));
-    if (self->main_tabstops == NULL) {
+    if (!self->main_tabstops) {
         PyErr_NoMemory();
         return false;
     }
@@ -326,7 +405,6 @@ screen_resize(Screen *self, unsigned int lines, unsigned int columns) {
     self->selection = EMPTY_SELECTION;
     self->url_range = EMPTY_SELECTION;
     self->selection_updated_once = false;
-    /* printf("old_cursor: (%u, %u) new_cursor: (%u, %u) beyond_content: %d\n", self->cursor->x, self->cursor->y, cursor_x, cursor_y, cursor_is_beyond_content); */
     self->cursor->x = MIN(cursor_x, self->columns - 1);
     self->cursor->y = MIN(cursor_y, self->lines - 1);
     if (cursor_is_beyond_content) {
@@ -337,14 +415,24 @@ screen_resize(Screen *self, unsigned int lines, unsigned int columns) {
         }
     }
     return true;
-} /* screen_resize */
+}
 
+/**
+ * 画像の拡大縮小
+ *
+ * \param self スクリーン
+ */
 void
 screen_rescale_images(Screen *self) {
     grman_rescale(self->main_grman, self->cell_size);
     grman_rescale(self->alt_grman, self->cell_size);
 }
 
+/**
+ * コールバックをリセットする - Pythonインターフェイス関数
+ *
+ * \param self スクリーン
+ */
 static PyObject *
 reset_callbacks(Screen *self, PyObject *a UNUSED) {
     Py_CLEAR(self->callbacks);
@@ -353,6 +441,11 @@ reset_callbacks(Screen *self, PyObject *a UNUSED) {
     Py_RETURN_NONE;
 }
 
+/**
+ * Screenオブジェクトが保持しているオブジェクトを解放する
+ *
+ * \param self スクリーン
+ */
 static void
 dealloc(Screen *self) {
     pthread_mutex_destroy(&self->read_buf_lock);
@@ -374,8 +467,14 @@ dealloc(Screen *self) {
     Py_TYPE(self)->tp_free((PyObject *)self);
 } // }}}
 
-// Draw text {{{
+// テキストの描画 {{{
 
+/**
+ * 文字セットの変更
+ *
+ * \param self スクリーン
+ * \param which 文字集合: 0=G0, 1=G1
+ */
 void
 screen_change_charset(Screen *self, uint32_t which) {
     switch (which) {
@@ -390,6 +489,13 @@ screen_change_charset(Screen *self, uint32_t which) {
     }
 }
 
+/**
+ * 文字セットの指定
+ *
+ * \param self スクリーン
+ * \param which 文字集合: 0=G0, 1=G1
+ * \param as 文字集合
+ */
 void
 screen_designate_charset(Screen *self, uint32_t which, uint32_t as) {
     switch (which) {
@@ -408,6 +514,16 @@ screen_designate_charset(Screen *self, uint32_t which, uint32_t as) {
     }
 }
 
+/**
+ * スクリーン端を超えてのカーソル移動
+ *  xpos, yposがスクリーン端であることが前提
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] cpu_cell CPUセル
+ * \param[in] gpu_cell gPUセル
+ * \param[in] xpos 移動先のx
+ * \param[in] ypos 移動先のy
+ */
 static inline void
 move_widened_char(Screen *self, CPUCell *cpu_cell, GPUCell *gpu_cell, index_type xpos, index_type ypos) {
     self->cursor->x = xpos;
@@ -416,7 +532,7 @@ move_widened_char(Screen *self, CPUCell *cpu_cell, GPUCell *gpu_cell, index_type
     GPUCell src_gpu = *gpu_cell, *dest_gpu;
     line_clear_text(self->linebuf->line, xpos, 1, BLANK_CHAR);
 
-    if (self->modes.mDECAWM) {  // overflow goes onto next line
+    if (self->modes.mDECAWM) {  // オーバーフロー分は次の行に
         screen_carriage_return(self);
         screen_linefeed(self);
         self->linebuf->line_attrs[self->cursor->y] |= CONTINUED_MASK;
@@ -433,23 +549,39 @@ move_widened_char(Screen *self, CPUCell *cpu_cell, GPUCell *gpu_cell, index_type
     }
     *dest_cpu = src_cpu;
     *dest_gpu = src_gpu;
-} /* move_widened_char */
+}
 
+/**
+ * 指定されたy座標がセレクションに含まれるか？
+ *
+ * \param[in] s セレクション
+ * \param[in] y y座標
+ * \return 含まれるなら真
+ */
 static inline bool
 selection_has_screen_line(Selection *s, int y) {
-    if (s->start_scrolled_by == s->end_scrolled_by && s->start_x == s->end_x && s->start_y == s->end_y) {
+    if (s->start_scrolled_by == s->end_scrolled_by &&
+        s->start_x == s->end_x &&
+        s->start_y == s->end_y) {
         return false;
     }
-    int top = (int)s->start_y - s->start_scrolled_by;
-    int bottom = (int)s->end_y - s->end_scrolled_by;
+    const int top = (int)s->start_y - s->start_scrolled_by;
+    const int bottom = (int)s->end_y - s->end_scrolled_by;
     return top <= y && y <= bottom;
 }
 
+/**
+ * 結合文字を描画する
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] ch 文字コード
+ */
 static inline void
 draw_combining_char(Screen *self, char_type ch) {
+
+    // カーソル位置を決めて、その行を初期化する
     bool has_prev_char = false;
     index_type xpos = 0, ypos = 0;
-
     if (self->cursor->x > 0) {
         ypos = self->cursor->y;
         linebuf_init_line(self->linebuf, ypos);
@@ -462,22 +594,33 @@ draw_combining_char(Screen *self, char_type ch) {
         xpos = self->columns - 1;
         has_prev_char = true;
     }
+
     if (has_prev_char) {
+        // 行のxpos位置に合成文字chを追加する
         line_add_combining_char(self->linebuf->line, ch, xpos);
         self->is_dirty = true;
+
+        // セレクションと被るならセレクションを解除する
         if (selection_has_screen_line(&self->selection, ypos)) {
             self->selection = EMPTY_SELECTION;
         }
+
+        // 行バッファをdirtyマークする
         linebuf_mark_line_dirty(self->linebuf, ypos);
-        if (ch == 0xfe0f) {  // emoji presentation variation marker makes default text presentation emoji (narrow emoji) into wide emoji
+
+        if (ch == 0xfe0f) { // 異体字セレクタ16
+            // 絵文字表現のバリエーションマーカーは、デフォルトのテキスト表現絵
+            // 文字（幅狭）を幅広文字にする
             CPUCell *cpu_cell = self->linebuf->line->cpu_cells + xpos;
             GPUCell *gpu_cell = self->linebuf->line->gpu_cells + xpos;
-            if ((gpu_cell->attrs & WIDTH_MASK) != 2 && cpu_cell->cc_idx[0] == VS16 &&
+            if ((gpu_cell->attrs & WIDTH_MASK) != 2 &&
+                cpu_cell->cc_idx[0] == VS16 &&
                 is_emoji_presentation_base(cpu_cell->ch)) {
+                // ゼロ幅のnull文字を追加する
                 if (self->cursor->x <= self->columns - 1) {
                     line_set_char(self->linebuf->line, self->cursor->x, 0, 0, self->cursor, true);
                 }
-                gpu_cell->attrs = (gpu_cell->attrs & !WIDTH_MASK) | 2;
+                gpu_cell->attrs = (gpu_cell->attrs & !WIDTH_MASK) | 2; // TODO: 何で否定なの？チルダじゃなくて？
                 if (xpos == self->columns - 1) {
                     move_widened_char(self, cpu_cell, gpu_cell, xpos, ypos);
                 }
@@ -486,10 +629,12 @@ draw_combining_char(Screen *self, char_type ch) {
                 }
             }
         }
-        else if (ch == 0xfe0e) {
+        else if (ch == 0xfe0e) { // 異体字セレクタ15
             CPUCell *cpu_cell = self->linebuf->line->cpu_cells + xpos;
             GPUCell *gpu_cell = self->linebuf->line->gpu_cells + xpos;
-            if ((gpu_cell->attrs & WIDTH_MASK) == 0 && cpu_cell->ch == 0 && xpos > 0) {
+            if ((gpu_cell->attrs & WIDTH_MASK) == 0 &&
+                cpu_cell->ch == 0 &&
+                xpos > 0) {
                 xpos--;
                 if (self->cursor->x > 0) {
                     self->cursor->x--;
@@ -498,25 +643,39 @@ draw_combining_char(Screen *self, char_type ch) {
                 gpu_cell = self->linebuf->line->gpu_cells + xpos;
             }
 
-            if ((gpu_cell->attrs & WIDTH_MASK) == 2 && cpu_cell->cc_idx[0] == VS15 &&
+            if ((gpu_cell->attrs & WIDTH_MASK) == 2 &&
+                cpu_cell->cc_idx[0] == VS15 &&
                 is_emoji_presentation_base(cpu_cell->ch)) {
                 gpu_cell->attrs = (gpu_cell->attrs & !WIDTH_MASK) | 1;
             }
         }
     }
-} /* draw_combining_char */
+}
 
+/**
+ * 文字を描画する
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] och 文字コード
+ */
 void
 screen_draw(Screen *self, uint32_t och) {
+    // 無視するべき文字か？
     if (is_ignored_char(och)) {
         return;
     }
-    uint32_t ch = och < 256 ? self->g_charset[och] : och;
-    bool is_cc = is_combining_char(ch);
+
+    // 文字コードを得る
+    const uint32_t ch = och < 256 ? self->g_charset[och] : och;
+
+    // 結合文字は特殊処理する
+    const bool is_cc = is_combining_char(ch);
     if (UNLIKELY(is_cc)) {
         draw_combining_char(self, ch);
         return;
     }
+
+    // 文字幅を調べる
     int char_width = wcwidth_std(ch);
     if (UNLIKELY(char_width < 1)) {
         if (char_width == 0) {
@@ -524,34 +683,55 @@ screen_draw(Screen *self, uint32_t och) {
         }
         char_width = 1;
     }
+
+    // 画面からはみ出す場合
     if (UNLIKELY(self->columns - self->cursor->x < (unsigned int)char_width)) {
         if (self->modes.mDECAWM) {
+            // DEC AWMモードなら改行してラインフィードして行属性に継続をマークする
             screen_carriage_return(self);
             screen_linefeed(self);
             self->linebuf->line_attrs[self->cursor->y] |= CONTINUED_MASK;
         }
         else {
+            // はみ出ないように行頭側にずらす
             self->cursor->x = self->columns - char_width;
         }
     }
 
+    // 行バッファの初期化
     linebuf_init_line(self->linebuf, self->cursor->y);
     if (self->modes.mIRM) {
         line_right_shift(self->linebuf->line, self->cursor->x, char_width);
     }
+
+    // 所定の位置に文字コードをセットしてカーソルを進める
     line_set_char(self->linebuf->line, self->cursor->x, ch, char_width, self->cursor, false);
     self->cursor->x++;
+
+    // 文字幅がダブルならを埋めてカーソルを進める
     if (char_width == 2) {
         line_set_char(self->linebuf->line, self->cursor->x, 0, 0, self->cursor, true);
         self->cursor->x++;
     }
+
+    // スクリーンをdirtyにする
     self->is_dirty = true;
+
+    // カーソル位置がセレクションに掛るなら、セレクションを解除する
     if (selection_has_screen_line(&self->selection, self->cursor->y)) {
         self->selection = EMPTY_SELECTION;
     }
-    linebuf_mark_line_dirty(self->linebuf, self->cursor->y);
-} /* screen_draw */
 
+    // 行バッファもdirtyにする
+    linebuf_mark_line_dirty(self->linebuf, self->cursor->y);
+}
+
+/**
+ * オーバーレイテキストを描画する
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] utf8_text UTF8文字列
+ */
 void
 screen_draw_overlay_text(Screen *self, const char *utf8_text) {
     if (self->overlay_line.is_active) {
@@ -560,10 +740,13 @@ screen_draw_overlay_text(Screen *self, const char *utf8_text) {
     if (!utf8_text || !utf8_text[0]) {
         return;
     }
+
+    // カーソル位置の行を取得
     Line *line = range_line_(self, self->cursor->y);
     if (!line) {
         return;
     }
+
     line_save_cells(line, 0, self->columns, self->overlay_line.gpu_cells, self->overlay_line.cpu_cells);
     self->overlay_line.is_active = true;
     self->overlay_line.ynum = self->cursor->y;
@@ -587,20 +770,35 @@ screen_draw_overlay_text(Screen *self, const char *utf8_text) {
     }
     self->cursor->reverse ^= true;
     self->modes.mDECAWM = orig_line_wrap_mode;
-} /* screen_draw_overlay_text */
+}
 
+/**
+ * アラインするとは? TODO: 謎
+ *
+ * \param[in] self Screenオブジェクト
+ */
 void
 screen_align(Screen *self) {
+    // マージンをなくす
     self->margin_top = 0;
     self->margin_bottom = self->lines - 1;
+
+    // カーソル位置を左上に
     screen_cursor_position(self, 1, 1);
+
+    // 行バッファを `E`で埋める
     linebuf_clear(self->linebuf, 'E');
 }
 
 // }}}
 
-// Graphics {{{
+// グラフィックス {{{
 
+/**
+ * アラインするとは? TODO: 謎
+ *
+ * \param[in] self Screenオブジェクト
+ */
 void
 screen_alignment_display(Screen *self) {
     // https://www.vt100.net/docs/vt510-rm/DECALN.html
@@ -614,6 +812,14 @@ screen_alignment_display(Screen *self) {
     }
 }
 
+/**
+ * SGR(Select Graphic Rendition)コマンドを処理する TODO: のかな？
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] params 謎
+ * \param[in] count 謎
+ * \param[in] region_ Regionオブジェクト
+ */
 void
 select_graphic_rendition(Screen *self, unsigned int *params, unsigned int count, Region *region_) {
     if (region_) {
@@ -637,7 +843,7 @@ select_graphic_rendition(Screen *self, unsigned int *params, unsigned int count,
         region.left -= 1;
         region.top -= 1;
         region.right -= 1;
-        region.bottom -= 1;                                                        // switch to zero based indexing
+        region.bottom -= 1; // 0ベースのインデックスへ切り替える
         if (self->modes.mDECSACE) {
             index_type x = MIN(region.left, self->columns - 1);
             index_type num = region.right >= x ? region.right - x + 1 : 0;
@@ -670,8 +876,11 @@ select_graphic_rendition(Screen *self, unsigned int *params, unsigned int count,
     else {
         cursor_from_sgr(self->cursor, params, count);
     }
-} /* select_graphic_rendition */
+}
 
+/**
+ * TODO: 謎
+ */
 static inline void
 write_to_test_child(Screen *self, const char *data, size_t sz) {
     PyObject *r = PyObject_CallMethod(self->test_child, "write", "y#", data, sz);
@@ -682,9 +891,16 @@ write_to_test_child(Screen *self, const char *data, size_t sz) {
     Py_CLEAR(r);
 }
 
+/**
+ * 子供(TODO: って何？)にデータを書く
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] data バイト配列
+ * \param[in] sz バイト数
+ */
 static inline void
 write_to_child(Screen *self, const char *data, size_t sz) {
-    if (self->window_id) {
+    if (self->window_id != 0) {
         schedule_write_to_child(self->window_id, 1, data, sz);
     }
     if (self->test_child != Py_None) {
@@ -692,6 +908,13 @@ write_to_child(Screen *self, const char *data, size_t sz) {
     }
 }
 
+/**
+ * 子供(TODO: って何？)にESCシーケンス書く
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] which Screenオブジェクト
+ * \param[in] data データ
+ */
 void
 write_escape_code_to_child(Screen *self, unsigned char which, const char *data) {
     const char *prefix, *suffix = self->modes.eight_bit_controls ? "\x9c" : "\033\\";
@@ -731,43 +954,73 @@ write_escape_code_to_child(Screen *self, unsigned char which, const char *data) 
             write_to_test_child(self, suffix, strlen(suffix));
         }
     }
-} /* write_escape_code_to_child */
+}
 
+/**
+ * カーソルがマージン範囲内に収まっているか調べる
+ *
+ * \param[in] self Screenオブジェクト
+ * \return 真偽値
+ */
 static inline bool
 cursor_within_margins(Screen *self) {
     return self->margin_top <= self->cursor->y && self->cursor->y <= self->margin_bottom;
 }
 
+/**
+ * グラフィックコマンドを捌く
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] cmd GraphicsCommandオブジェクト
+ * \param[in] payload コマンド本文
+ */
 void
 screen_handle_graphics_command(Screen *self, const GraphicsCommand *cmd, const uint8_t *payload) {
+    // カーソル位置
     unsigned int x = self->cursor->x, y = self->cursor->y;
-    const char *response = grman_handle_command(self->grman, cmd, payload, self->cursor, &self->is_dirty, self->cell_size);
 
-    if (response != NULL) {
+    // GraphicsManagerに処理させ、得られたエスケープシーケンスを書き出す
+    const char *response = grman_handle_command(self->grman, cmd, payload, self->cursor, &self->is_dirty, self->cell_size);
+    if (response) {
         write_escape_code_to_child(self, APC, response);
     }
+
+    // カーソル移動への対処
     if (x != self->cursor->x || y != self->cursor->y) {
-        bool in_margins = cursor_within_margins(self);
+        const bool in_margins = cursor_within_margins(self);
+
+        // 右端を超えていたら次の行の行頭に移動させる
         if (self->cursor->x >= self->columns) {
             self->cursor->x = 0;
             self->cursor->y++;
         }
+
+        // 下マージンを超えていたらスクロールする
         if (self->cursor->y > self->margin_bottom) {
             screen_scroll(self, self->cursor->y - self->margin_bottom);
         }
+
+        // カーソルがスクリーン上に位置することを保証する
         screen_ensure_bounds(self, false, in_margins);
     }
 }
 
 // }}}
 
-// Modes {{{
+// モード {{{
 
+/**
+ * スクリーンバッファの切り替え
+ *
+ * \param[in] self Screenオブジェクト
+ */
 void
 screen_toggle_screen_buffer(Screen *self) {
-    bool to_alt = self->linebuf == self->main_linebuf;
+    const bool to_alt = self->linebuf == self->main_linebuf;
 
-    grman_clear(self->alt_grman, true, self->cell_size);  // always clear the alt buffer graphics to free up resources, since it has to be cleared when switching back to it anyway
+    // リソースを解放するためにaltバッファグラフィックを常にクリアします
+    // とにかく元に戻す場合はクリアする必要があるためです
+    grman_clear(self->alt_grman, true, self->cell_size);
     if (to_alt) {
         linebuf_clear(self->alt_linebuf, BLANK_CHAR);
         screen_save_cursor(self);
@@ -786,13 +1039,15 @@ screen_toggle_screen_buffer(Screen *self) {
     screen_history_scroll(self, SCROLL_FULL, false);
     self->is_dirty = true;
     self->selection = EMPTY_SELECTION;
-} /* screen_toggle_screen_buffer */
+}
 
+// これはGUIによって処理されるため、実装されていません
 void screen_normal_keypad_mode(Screen UNUSED *self) {
-}                                                      // Not implemented as this is handled by the GUI
+}
 
+// これはGUIによって処理されるため、実装されていません
 void screen_alternate_keypad_mode(Screen UNUSED *self) {
-}                                                          // Not implemented as this is handled by the GUI
+}
 
 static inline void
 set_mode_from_const(Screen *self, unsigned int mode, bool val) {
@@ -897,8 +1152,14 @@ screen_set_8bit_controls(Screen *self, bool yes) {
 
 // }}}
 
-// Cursor {{{
+// カーソル {{{
 
+/**
+ * カーソル位置の文字の幅を得る
+ *
+ * \param[in] self Screenオブジェクト
+ * \return 1 or 2
+ */
 unsigned long
 screen_current_char_width(Screen *self) {
     unsigned long ans = 1;
@@ -909,21 +1170,38 @@ screen_current_char_width(Screen *self) {
     return ans;
 }
 
+/**
+ * カーソルが可視か？
+ *
+ * \param[in] self Screenオブジェクト
+ * \return 真偽値
+ */
 bool
 screen_is_cursor_visible(Screen *self) {
     return self->modes.mDECTCEM;
 }
 
+/**
+ * バックスペース処理
+ *
+ * \param[in] self Screenオブジェクト
+ */
 void
 screen_backspace(Screen *self) {
     screen_cursor_back(self, 1, -1);
 }
 
+/**
+ * カーソルを直近のタブ位置に移動させる
+ *
+ * \param[in] self Screenオブジェクト
+ */
 void
 screen_tab(Screen *self) {
-    // Move to the next tab space, or the end of the screen if there aren't anymore left.
+    // 次のタブ空間に移動するか、まだ残っていない場合は画面の最後に移動します。
     unsigned int found = 0;
 
+    // カーソル以降のタブ位置を求める
     for (unsigned int i = self->cursor->x + 1; i < self->columns; i++) {
         if (self->tabstops[i]) {
             found = i;
@@ -933,24 +1211,27 @@ screen_tab(Screen *self) {
     if (!found) {
         found = self->columns - 1;
     }
+
+    // カーソルをタブ位置に移動させる
     if (found != self->cursor->x) {
         if (self->cursor->x < self->columns) {
             linebuf_init_line(self->linebuf, self->cursor->y);
             combining_type diff = found - self->cursor->x;
-            CPUCell *cpu_cell = self->linebuf->line->cpu_cells + self->cursor->x;
+            CPUCell *cpu_cell = &self->linebuf->line->cpu_cells[self->cursor->x];
             bool ok = true;
             for (combining_type i = 0; i < diff; i++) {
-                CPUCell *c = cpu_cell + i;
-                if (c->ch != ' ' && c->ch != 0) {
+                CPUCell *cell = &cpu_cell[i];
+                if (cell->ch != ' ' && cell->ch != 0) {
                     ok = false;
                     break;
                 }
             }
             if (ok) {
+                // カーソル位置にタブ文字を入れて、航続のタブ幅部分は空白文字を埋める
                 for (combining_type i = 0; i < diff; i++) {
-                    CPUCell *c = cpu_cell + i;
-                    c->ch = ' ';
-                    zero_at_ptr_count(c->cc_idx, arraysz(c->cc_idx));
+                    CPUCell *cell = &cpu_cell[i];
+                    cell->ch = ' ';
+                    zero_at_ptr_count(cell->cc_idx, arraysz(cell->cc_idx));
                 }
                 cpu_cell->ch = '\t';
                 cpu_cell->cc_idx[0] = diff;
@@ -958,12 +1239,17 @@ screen_tab(Screen *self) {
         }
         self->cursor->x = found;
     }
-} /* screen_tab */
+}
 
+/**
+ * カーソルを直前のタブ位置に移動させる
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] count 回数
+ */
 void
 screen_backtab(Screen *self, unsigned int count) {
-    // Move back count tabs
-    if (!count) {
+    if (count == 0) {
         count = 1;
     }
     int i;
@@ -981,17 +1267,23 @@ screen_backtab(Screen *self, unsigned int count) {
     }
 }
 
+/**
+ * カーソル位置から直近のタブ位置までクリアする
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] how TODO: 何これー
+ */
 void
 screen_clear_tab_stop(Screen *self, unsigned int how) {
     switch (how) {
-    case 0:
+    case 0: // カーソル位置
         if (self->cursor->x < self->columns) {
             self->tabstops[self->cursor->x] = false;
         }
         break;
-    case 2:
+    case 2: // 何もしない
         break;      // no-op
-    case 3:
+    case 3: // 全てのタブ位置
         for (unsigned int i = 0; i < self->columns; i++) {
             self->tabstops[i] = false;
         }
@@ -1002,6 +1294,11 @@ screen_clear_tab_stop(Screen *self, unsigned int how) {
     }
 }
 
+/**
+ * カーソル位置をタブ位置とする
+ *
+ * \param[in] self Screenオブジェクト
+ */
 void
 screen_set_tab_stop(Screen *self) {
     if (self->cursor->x < self->columns) {
@@ -1009,8 +1306,15 @@ screen_set_tab_stop(Screen *self) {
     }
 }
 
+/**
+ * カーソルの移動
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] count 移動桁数
+ * \param[in] move_direction 移動方向
+ */
 void
-screen_cursor_back(Screen *self, unsigned int count /*=1*/, int move_direction /*=-1*/) {
+screen_cursor_back(Screen *self, unsigned int count, int move_direction) {
     if (count == 0) {
         count = 1;
     }
@@ -1023,14 +1327,28 @@ screen_cursor_back(Screen *self, unsigned int count /*=1*/, int move_direction /
     screen_ensure_bounds(self, false, cursor_within_margins(self));
 }
 
+/**
+ * カーソルを前方に移動する
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] count 移動桁数
+ */
 void
-screen_cursor_forward(Screen *self, unsigned int count /*=1*/) {
+screen_cursor_forward(Screen *self, unsigned int count) {
     screen_cursor_back(self, count, 1);
 }
 
+/**
+ * カーソルを上下方向に移動する
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] count 移動桁数
+ * \param[in] do_carriage_return 真ならカーソルを行頭に移動させる
+ * \param[in] move_direction 移動方向
+ */
 void
-screen_cursor_up(Screen *self, unsigned int count /*=1*/, bool do_carriage_return /*=false*/, int move_direction /*=-1*/) {
-    bool in_margins = cursor_within_margins(self);
+screen_cursor_up(Screen *self, unsigned int count, bool do_carriage_return, int move_direction) {
+    const bool in_margins = cursor_within_margins(self);
 
     if (count == 0) {
         count = 1;
@@ -1047,21 +1365,45 @@ screen_cursor_up(Screen *self, unsigned int count /*=1*/, bool do_carriage_retur
     }
 }
 
+/**
+ * カーソルを上方向に移動する
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] count 移動行数
+ */
 void
-screen_cursor_up1(Screen *self, unsigned int count /*=1*/) {
+screen_cursor_up1(Screen *self, unsigned int count) {
     screen_cursor_up(self, count, true, -1);
 }
 
+/**
+ * カーソルを下方向に移動する
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] count 移動行数
+ */
 void
-screen_cursor_down(Screen *self, unsigned int count /*=1*/) {
+screen_cursor_down(Screen *self, unsigned int count) {
     screen_cursor_up(self, count, false, 1);
 }
 
+/**
+ * カーソルを下方向に移動してさらに行頭に移動する
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] count 移動行数
+ */
 void
-screen_cursor_down1(Screen *self, unsigned int count /*=1*/) {
+screen_cursor_down1(Screen *self, unsigned int count) {
     screen_cursor_up(self, count, true, 1);
 }
 
+/**
+ * カーソルを指定桁に移動する
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] column 桁数
+ */
 void
 screen_cursor_to_column(Screen *self, unsigned int column) {
     unsigned int x = MAX(column, 1u) - 1;
@@ -1072,12 +1414,20 @@ screen_cursor_to_column(Screen *self, unsigned int column) {
     }
 }
 
+/**
+ * TODO: 何これ？
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] s Selectionオブジェクト
+ * \param[in] up 上？
+ */
 static inline void
 index_selection(Screen *self, Selection *s, bool up) {
     if (s->start_scrolled_by == s->end_scrolled_by && s->start_x == s->end_x && s->start_y == s->end_y) {
         return;
     }
     if (up) {
+        // scrolled_byを増やしてセレクションの位置を減らす
         if (s->start_y == 0) {
             s->start_scrolled_by += 1;
         }
@@ -1105,7 +1455,7 @@ index_selection(Screen *self, Selection *s, bool up) {
             s->end_y++;
         }
     }
-} /* index_selection */
+}
 
 #define INDEX_GRAPHICS(amtv) { \
         bool is_main = self->linebuf == self->main_linebuf; \
@@ -1116,6 +1466,9 @@ index_selection(Screen *self, Selection *s, bool up) {
         grman_scroll_images(self->grman, &s, self->cell_size); \
 }
 
+/**
+ * 上方向へのスクロール処理
+ */
 #define INDEX_UP \
     if (self->overlay_line.is_active) deactivate_overlay_line(self); \
     linebuf_index(self->linebuf, top, bottom); \
@@ -1130,22 +1483,31 @@ index_selection(Screen *self, Selection *s, bool up) {
     self->is_dirty = true; \
     index_selection(self, &self->selection, true);
 
+/**
+ * カーソルを1行下に移動し、必要に応じて画面をスクロールする
+ *
+ * \param[in] self Screenオブジェクト
+ */
 void
 screen_index(Screen *self) {
-    // Move cursor down one line, scrolling screen if needed
     unsigned int top = self->margin_top, bottom = self->margin_bottom;
 
     if (self->cursor->y == bottom) {
-        INDEX_UP;
+        INDEX_UP; // 上方向にスクロールかな？
     }
     else {
         screen_cursor_down(self, 1);
     }
 }
 
+/**
+ * カーソルを動かさずに、画面を上にスクロールする
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] count 回数
+ */
 void
 screen_scroll(Screen *self, unsigned int count) {
-    // Scroll the screen up by count lines, not moving the cursor
     unsigned int top = self->margin_top, bottom = self->margin_bottom;
 
     while (count > 0) {
@@ -1154,6 +1516,9 @@ screen_scroll(Screen *self, unsigned int count) {
     }
 }
 
+/**
+ * 下方向へのスクロール処理
+ */
 #define INDEX_DOWN \
     if (self->overlay_line.is_active) deactivate_overlay_line(self); \
     linebuf_reverse_index(self->linebuf, top, bottom); \
@@ -1162,6 +1527,11 @@ screen_scroll(Screen *self, unsigned int count) {
     self->is_dirty = true; \
     index_selection(self, &self->selection, false);
 
+/**
+ * カーソルを1行上に移動し、必要に応じて画面をスクロールする
+ *
+ * \param[in] self Screenオブジェクト
+ */
 void
 screen_reverse_index(Screen *self) {
     // Move cursor up one line, scrolling screen if needed
@@ -1175,9 +1545,14 @@ screen_reverse_index(Screen *self) {
     }
 }
 
+/**
+ * カーソルを動かさずに、画面を下にスクロールする
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] count 回数
+ */
 void
 screen_reverse_scroll(Screen *self, unsigned int count) {
-    // Scroll the screen down by count lines, not moving the cursor
     count = MIN(self->lines, count);
     unsigned int top = self->margin_top, bottom = self->margin_bottom;
     while (count > 0) {
@@ -1186,6 +1561,11 @@ screen_reverse_scroll(Screen *self, unsigned int count) {
     }
 }
 
+/**
+ * キャリッジリターンする
+ *
+ * \param[in] self Screenオブジェクト
+ */
 void
 screen_carriage_return(Screen *self) {
     if (self->cursor->x != 0) {
@@ -1193,6 +1573,11 @@ screen_carriage_return(Screen *self) {
     }
 }
 
+/**
+ * ラインフィードする
+ *
+ * \param[in] self Screenオブジェクト
+ */
 void
 screen_linefeed(Screen *self) {
     bool in_margins = cursor_within_margins(self);
@@ -1206,8 +1591,10 @@ screen_linefeed(Screen *self) {
 
 #define buffer_push(self, ans) { \
         ans = (self)->buf + (((self)->start_of_data + (self)->count) % SAVEPOINTS_SZ); \
-        if ((self)->count == SAVEPOINTS_SZ) (self)->start_of_data = ((self)->start_of_data + 1) % SAVEPOINTS_SZ; \
-        else (self)->count++; \
+        if ((self)->count == SAVEPOINTS_SZ) \
+            (self)->start_of_data = ((self)->start_of_data + 1) % SAVEPOINTS_SZ; \
+        else \
+            (self)->count++; \
 }
 
 #define buffer_pop(self, ans)  { \
@@ -1226,19 +1613,36 @@ screen_linefeed(Screen *self) {
     sp->current_charset = self->current_charset; \
     sp->use_latin1 = self->use_latin1;
 
+/**
+ * カーソルを保存する
+ *
+ * \param[in] self Screenオブジェクト
+ */
 void
 screen_save_cursor(Screen *self) {
     SavepointBuffer *pts = self->linebuf == self->main_linebuf ? &self->main_savepoints : &self->alt_savepoints;
     Savepoint *sp;
 
+    // pts上にspを確保する
     buffer_push(pts, sp);
+
+    // カーソルのコピー
     cursor_copy_to(self->cursor, &(sp->cursor));
+
+    // モードのコピー
     sp->mDECOM = self->modes.mDECOM;
     sp->mDECAWM = self->modes.mDECAWM;
     sp->mDECSCNM = self->modes.mDECSCNM;
+
+    // 文字集合のコピー
     COPY_CHARSETS(self, sp);
 }
 
+/**
+ * モードを保存する
+ *
+ * \param[in] self Screenオブジェクト
+ */
 void
 screen_save_modes(Screen *self) {
     ScreenModes *m;
@@ -1247,13 +1651,18 @@ screen_save_modes(Screen *self) {
     *m = self->modes;
 }
 
+/**
+ * カーソルを復元する
+ *
+ * \param[in] self Screenオブジェクト
+ */
 void
 screen_restore_cursor(Screen *self) {
     SavepointBuffer *pts = self->linebuf == self->main_linebuf ? &self->main_savepoints : &self->alt_savepoints;
     Savepoint *sp;
 
     buffer_pop(pts, sp);
-    if (sp == NULL) {
+    if (!sp) {
         screen_cursor_position(self, 1, 1);
         screen_reset_mode(self, DECOM);
         RESET_CHARSETS;
@@ -1268,17 +1677,24 @@ screen_restore_cursor(Screen *self) {
         cursor_copy_to(&(sp->cursor), self->cursor);
         screen_ensure_bounds(self, false, false);
     }
-} /* screen_restore_cursor */
+}
 
+/**
+ * モードを復元する
+ *
+ * \param[in] self Screenオブジェクト
+ */
 void
 screen_restore_modes(Screen *self) {
     const ScreenModes *m;
 
     buffer_pop(&self->modes_savepoints, m);
-    if (m == NULL) {
+    if (!m) {
         m = &empty_modes;
     }
+
 #define S(name) set_mode_from_const(self, name, m->m ## name)
+
     S(DECTCEM);
     S(DECSCNM);
     S(DECSCNM);
@@ -1291,11 +1707,19 @@ screen_restore_modes(Screen *self) {
     S(EXTENDED_KEYBOARD);
     self->modes.mouse_tracking_mode = m->mouse_tracking_mode;
     self->modes.mouse_tracking_protocol = m->mouse_tracking_protocol;
-#undef S
-} /* screen_restore_modes */
 
+#undef S
+}
+
+/**
+ * カーソルがスクリーン領域内に収まるようにする
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] force_use_margins 強制的にマージンを使用する
+ * \param[in] in_margins マージン上に位置しても良い
+ */
 void
-screen_ensure_bounds(Screen *self, bool force_use_margins /*=false*/, bool in_margins) {
+screen_ensure_bounds(Screen *self, bool force_use_margins, bool in_margins) {
     unsigned int top, bottom;
 
     if (in_margins && (force_use_margins || self->modes.mDECOM)) {
@@ -1310,6 +1734,13 @@ screen_ensure_bounds(Screen *self, bool force_use_margins /*=false*/, bool in_ma
     self->cursor->y = MAX(top, MIN(self->cursor->y, bottom));
 }
 
+/**
+ * カーソルの位置決め
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] line 行
+ * \param[in] column 桁
+ */
 void
 screen_cursor_position(Screen *self, unsigned int line, unsigned int column) {
     bool in_margins = cursor_within_margins(self);
@@ -1325,6 +1756,13 @@ screen_cursor_position(Screen *self, unsigned int line, unsigned int column) {
     screen_ensure_bounds(self, false, in_margins);
 }
 
+/**
+ * カーソルを行へ移動する
+ *  桁位置はそのまま
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] line 行
+ */
 void
 screen_cursor_to_line(Screen *self, unsigned int line) {
     screen_cursor_position(self, line, self->cursor->x + 1);
@@ -1332,7 +1770,7 @@ screen_cursor_to_line(Screen *self, unsigned int line) {
 
 // }}}
 
-// Editing {{{
+// 編集 {{{
 
 void
 screen_erase_in_line(Screen *self, unsigned int how, bool private) {
@@ -1872,6 +2310,8 @@ update_line_data(Line *line, unsigned int dest_y, uint8_t *data) {
 
 /**
  * スクリーンのdirty状態をリセットする
+ *
+ * \param[in] self スクリーン
  */
 static inline void
 screen_reset_dirty(Screen *self) {
@@ -1881,50 +2321,64 @@ screen_reset_dirty(Screen *self) {
 
 /**
  * セルデータを更新する
+ *  shaders.cのcell_prepare_to_renderから呼ばれる
  *
  * @param self スクリーン
  * @param address ？
- * @param fonts_data ？
+ * @param fonts_data FONTS_DATA_HANDLE
  * @param cursor_has_moved ？
  */
 void
 screen_update_cell_data(Screen *self, void *address, FONTS_DATA_HANDLE fonts_data, bool cursor_has_moved) {
     unsigned int history_line_added_count = self->history_line_added_count;
-    index_type lnum;
     bool was_dirty = self->is_dirty;
 
     if (self->scrolled_by) {
         self->scrolled_by = MIN(self->scrolled_by + history_line_added_count, self->historybuf->count);
     }
 
-    // dirty状態をリセット
+    // dirty状態をクリア
     screen_reset_dirty(self);
     self->scroll_changed = false;
 
     // 行頭(?)からスクロール行数分をレンダリング
     for (index_type y = 0; y < MIN(self->lines, self->scrolled_by); y++) {
-        lnum = self->scrolled_by - 1 - y;
+
+        // lnumが指す履歴バッファ中の行を初期化する
+        const index_type lnum = self->scrolled_by - 1 - y;
         historybuf_init_line(self->historybuf, lnum, self->historybuf->line);
         if (self->historybuf->line->has_dirty_text) {
+
             // 行をレンダリング
             render_line(fonts_data, self->historybuf->line, lnum, self->cursor, self->disable_ligatures);
+
+            // 履歴バッファ内の行のdrity状態をクリアする
             historybuf_mark_line_clean(self->historybuf, lnum);
         }
+
         // 行データを更新
         update_line_data(self->historybuf->line, y, address);
     }
 
     // スクロール行数分から行末までをレンダリング
     for (index_type y = self->scrolled_by; y < self->lines; y++) {
-        lnum = y - self->scrolled_by;
+        // lnumが指す行バッファの行を初期化する
+        const index_type lnum = y - self->scrolled_by;
         linebuf_init_line(self->linebuf, lnum);
         if (self->linebuf->line->has_dirty_text ||
             (cursor_has_moved && (self->cursor->y == lnum || self->last_rendered_cursor_y == lnum))) {
+
+            // 行をレンダリング
             render_line(fonts_data, self->linebuf->line, lnum, self->cursor, self->disable_ligatures);
+
+            // 行バッファのdirty状態をクリアする
             linebuf_mark_line_clean(self->linebuf, lnum);
         }
+
+        // 行データを更新
         update_line_data(self->linebuf->line, y, address);
     }
+
     if (was_dirty) {
         self->url_range = EMPTY_SELECTION;
     }
@@ -2173,47 +2627,109 @@ deactivate_overlay_line(Screen *self) {
 // }}}
 
 // Python interface {{{
-#define WRAP0(name)                   static PyObject *name(Screen *self, PyObject *a UNUSED) {screen_ ## name(self); \
-                                                                                               Py_RETURN_NONE;}
-#define WRAP0x(name)                  static PyObject *xxx_ ## name(Screen *self, PyObject *a UNUSED) {screen_ ## name(self); \
-                                                                                                       Py_RETURN_NONE;}
-#define WRAP1(name, defval)           static PyObject *name(Screen *self, PyObject *args) {unsigned int v = defval; \
-                                                                                           if (!PyArg_ParseTuple(args, "|I", \
-                                                                                                                 &v)) return \
-                                                                                               NULL; screen_ ## name(self, v); \
-                                                                                           Py_RETURN_NONE;}
-#define WRAP1B(name, defval)          static PyObject *name(Screen *self, PyObject *args) {unsigned int v = defval; \
-                                                                                           int b = false; \
-                                                                                           if (!PyArg_ParseTuple(args, "|Ip", \
-                                                                                                                 &v, \
-                                                                                                                 &b)) return \
-                                                                                               NULL; \
-                                                                                           screen_ ## name(self, v, b); \
-                                                                                           Py_RETURN_NONE;}
-#define WRAP1E(name, defval, ...)     static PyObject *name(Screen *self, PyObject *args) {unsigned int v = defval; \
-                                                                                           if (!PyArg_ParseTuple(args, "|I", \
-                                                                                                                 &v)) return \
-                                                                                               NULL; screen_ ## name(self, \
-                                                                                                                     v, \
-                                                                                                                     __VA_ARGS__); \
-                                                                                           Py_RETURN_NONE;}
-#define WRAP2(name, defval1, defval2) static PyObject *name(Screen *self, PyObject *args) {unsigned int a = defval1, \
-                                                                                           b = defval2; \
-                                                                                           if (!PyArg_ParseTuple(args, "|II", \
-                                                                                                                 &a, \
-                                                                                                                 &b)) return \
-                                                                                               NULL; \
-                                                                                           screen_ ## name(self, a, b); \
-                                                                                           Py_RETURN_NONE;}
-#define WRAP2B(name)                  static PyObject *name(Screen *self, PyObject *args) {unsigned int a, b; int p; \
-                                                                                           if (!PyArg_ParseTuple(args, "IIp", \
-                                                                                                                 &a, &b, \
-                                                                                                                 &p)) return \
-                                                                                               NULL; screen_ ## name(self, \
-                                                                                                                     a, \
-                                                                                                                     b, \
-                                                                                                                     (bool)p); \
-                                                                                           Py_RETURN_NONE;}
+
+/**
+ * 無引数のPythonインターフェイス関数を定義するマクロ
+ *  内部的に `scree_{name}` という名前の関数を呼び出し、その時の引数はScreenオ
+ *  ブジェクトのみ。
+ *
+ * @param name Pythonインターフェイス関数名
+ */
+#define WRAP0(name) \
+    static PyObject *name(Screen *self, PyObject *a UNUSED) { \
+        screen_ ## name(self); \
+        Py_RETURN_NONE; \
+    }
+
+/**
+ * 名前が `xxx_` で始まる、無引数のPythonインターフェイス関数を定義するマクロ
+ *  
+ *  内部的に `scree_{name}` という名前の関数を呼び出し、その時の引数はScreenオ
+ *  ブジェクトのみ。
+ *
+ * @param name Pythonインターフェイス関数名
+ */
+#define WRAP0x(name) \
+    static PyObject *xxx_ ## name(Screen *self, PyObject *a UNUSED) { \
+        screen_ ## name(self); \
+        Py_RETURN_NONE; \
+    }
+
+/**
+ * 引数1つのPythonインターフェイス関数を定義するマクロ
+ *
+ * @param name Pythonインターフェイス関数名
+ * @param defval 引数が未指定の場合のデフォルト値(unsigned int)
+ */
+#define WRAP1(name, defval) \
+    static PyObject *name(Screen *self, PyObject *args) { \
+        unsigned int v = defval; \
+        if (!PyArg_ParseTuple(args, "|I", &v)) return NULL; \
+        screen_ ## name(self, v); \
+        Py_RETURN_NONE; \
+    }
+
+/**
+ * 引数2つのPythonインターフェイス関数を定義するマクロ
+ *
+ * TODO: falseなのに `int` とかちょっと...
+ *
+ * @param name Pythonインターフェイス関数名
+ * @param defval 引数が未指定の場合のデフォルト値(unsigned int)
+ */
+#define WRAP1B(name, defval) \
+    static PyObject *name(Screen *self, PyObject *args) { \
+        unsigned int v = defval; \
+        int b = false; \
+        if (!PyArg_ParseTuple(args, "|Ip", &v, &b)) return NULL; \
+        screen_ ## name(self, v, b); \
+        Py_RETURN_NONE; \
+    }
+
+/**
+ * 可変長引数のPythonインターフェイス関数を定義するマクロ
+ *  内部的に `scree_{name}` という名前の関数を呼び出し、その時の引数はScreenオ
+ *  ブジェクトとdefvalと可変長引数。
+ *
+ * @param name Pythonインターフェイス関数名
+ * @param defval 引数が未指定の場合のデフォルト値(unsigned int)
+ */
+#define WRAP1E(name, defval, ...) \
+    static PyObject *name(Screen *self, PyObject *args) { \
+        unsigned int v = defval; \
+        if (!PyArg_ParseTuple(args, "|I", &v)) return NULL; \
+        screen_ ## name(self, v, __VA_ARGS__); \
+        Py_RETURN_NONE; \
+    }
+
+/**
+ * 2引数のPythonインターフェイス関数を定義するマクロ
+ *
+ * @param name Pythonインターフェイス関数名
+ * @param defval1 引数が未指定の場合のデフォルト値(unsigned int)
+ * @param defval2 引数が未指定の場合のデフォルト値(unsigned int)
+ */
+#define WRAP2(name, defval1, defval2) \
+    static PyObject *name(Screen *self, PyObject *args) { \
+        unsigned int a = defval1, b = defval2; \
+        if (!PyArg_ParseTuple(args, "|II", &a, &b)) return NULL; \
+        screen_ ## name(self, a, b); \
+        Py_RETURN_NONE; \
+    }
+
+/**
+ * 3引数のPythonインターフェイス関数を定義するマクロ
+ *
+ * @param name Pythonインターフェイス関数名
+ */
+#define WRAP2B(name) \
+    static PyObject *name(Screen *self, PyObject *args) { \
+        unsigned int a, b; \
+        int p; \
+        if (!PyArg_ParseTuple(args, "IIp", &a, &b, &p)) return NULL; \
+        screen_ ## name(self, a, b, (bool)p); \
+        Py_RETURN_NONE; \
+    }
 
 static PyObject *
 set_pending_timeout(Screen *self, PyObject *val) {
@@ -2228,19 +2744,25 @@ set_pending_timeout(Screen *self, PyObject *val) {
 
 static PyObject *
 as_text(Screen *self, PyObject *args) {
+    // 行取得関数は `visual_line_`
     as_text_generic(args, self, visual_line_, self->lines, self->columns);
 }
 
 static PyObject *
 as_text_non_visual(Screen *self, PyObject *args) {
+    // 行取得関数は `range_line_`
     as_text_generic(args, self, range_line_, self->lines, self->columns);
 }
 
 static inline PyObject *
 as_text_generic_wrapper(Screen *self, PyObject *args, Line *(get_line)(Screen *, int)) {
+    // 行取得関数は引数で指定される
     as_text_generic(args, self, get_line, self->lines, self->columns);
 }
 
+/**
+ * なんかよくわからんが行バッファはmainとaltがあってaltから行を取得する関数。らしい...
+ */
 static PyObject *
 as_text_alternate(Screen *self, PyObject *args) {
     LineBuf *original = self->linebuf;
@@ -2251,6 +2773,9 @@ as_text_alternate(Screen *self, PyObject *args) {
     return ans;
 }
 
+/**
+ * 幅広文字列の幅(幅狭文字単位)を得る - Pythonモジュール
+ */
 static PyObject *
 screen_wcswidth(PyObject UNUSED *self, PyObject *str) {
     if (PyUnicode_READY(str) != 0) {
@@ -2262,7 +2787,7 @@ screen_wcswidth(PyObject UNUSED *self, PyObject *str) {
     unsigned long ans = 0;
     char_type prev_ch = 0;
     int prev_width = 0;
-    bool in_sgr = false;
+    bool in_sgr = false; // TODO: sgrって何だ？サロゲートペア？
     for (i = 0; i < len; i++) {
         char_type ch = PyUnicode_READ(kind, data, i);
         if (in_sgr) {
@@ -2271,10 +2796,12 @@ screen_wcswidth(PyObject UNUSED *self, PyObject *str) {
             }
             continue;
         }
+        // ESC
         if (ch == 0x1b && i + 1 < len && PyUnicode_READ(kind, data, i + 1) == '[') {
             in_sgr = true;
             continue;
         }
+        // 絵文字(カラー)
         if (ch == 0xfe0f) {
             if (is_emoji_presentation_base(prev_ch) && prev_width == 1) {
                 ans += 1;
@@ -2284,6 +2811,7 @@ screen_wcswidth(PyObject UNUSED *self, PyObject *str) {
                 prev_width = 0;
             }
         }
+        // 絵文字(テキスト)
         else if (ch == 0xfe0e) {
             if (is_emoji_presentation_base(prev_ch) && prev_width == 2) {
                 ans -= 1;
@@ -2294,8 +2822,7 @@ screen_wcswidth(PyObject UNUSED *self, PyObject *str) {
             }
         }
         else {
-            int w = wcwidth_std(ch);
-            switch (w) {
+            switch (wcwidth_std(ch)) {
             case -1:
             case 0:
                 prev_width = 0;
@@ -2312,8 +2839,20 @@ screen_wcswidth(PyObject UNUSED *self, PyObject *str) {
         prev_ch = ch;
     }
     return PyLong_FromUnsignedLong(ans);
-} /* screen_wcswidth */
+}
 
+/**
+ * 文字列が指定範囲に収まる（トランケートした結果の）文字数を返す - Pythonモジュール
+ *
+ * 引数は
+ *  - str: 文字列
+ *  - num_cells: セル数
+ *  - start_pos: 開始位置 (デフォルトで0)
+ *
+ * \param[in] self 未使用
+ * \param[in] args 引数
+ * \return セル数
+ */
 static PyObject *
 screen_truncate_point_for_length(PyObject UNUSED *self, PyObject *args) {
     PyObject *str;
@@ -2354,8 +2893,7 @@ screen_truncate_point_for_length(PyObject UNUSED *self, PyObject *args) {
             }
         }
         else {
-            int w = wcwidth_std(ch);
-            switch (w) {
+            switch (wcwidth_std(ch)) {
             case -1:
             case 0:
                 prev_width = 0;
@@ -2367,6 +2905,7 @@ screen_truncate_point_for_length(PyObject UNUSED *self, PyObject *args) {
                 prev_width = 1;
                 break;
             }
+            // num_cellsを超えたらループ終わり
             if (width_so_far + prev_width > num_cells) {
                 break;
             }
@@ -2375,7 +2914,7 @@ screen_truncate_point_for_length(PyObject UNUSED *self, PyObject *args) {
         prev_ch = ch;
     }
     return PyLong_FromUnsignedLong(i);
-} /* screen_truncate_point_for_length */
+}
 
 static PyObject *
 line(Screen *self, PyObject *val) {
@@ -2412,6 +2951,14 @@ visual_line(Screen *self, PyObject *args) {
     return Py_BuildValue("O", visual_line_(self, y));
 }
 
+/**
+ * 文字列の描画 - Pythonインターフェイス
+ *
+ * \param[in] self Screenオブジェクト
+ * \param[in] src Python文字列
+ * \note kitty_test/screen.py にテストケースあり
+ * \note kitty/fonts/render.py から呼び出される
+ */
 static PyObject *
 draw(Screen *self, PyObject *src) {
     if (!PyUnicode_Check(src)) {
@@ -2421,11 +2968,14 @@ draw(Screen *self, PyObject *src) {
     if (PyUnicode_READY(src) != 0) {
         return PyErr_NoMemory();
     }
-    int kind = PyUnicode_KIND(src);
-    void *buf = PyUnicode_DATA(src);
-    Py_ssize_t sz = PyUnicode_GET_LENGTH(src);
-    for (Py_ssize_t i = 0; i < sz; i++) {
-        screen_draw(self, PyUnicode_READ(kind, buf, i));
+
+    // 文字列を文字単位でループして描画していく
+    const int kind = PyUnicode_KIND(src);
+    const void *buf = PyUnicode_DATA(src);
+    const Py_ssize_t length = PyUnicode_GET_LENGTH(src);
+    for (Py_ssize_t i = 0; i < length; i++) {
+        const Py_UCS4 u4 = PyUnicode_READ(kind, buf, i);
+        screen_draw(self, u4);
     }
     Py_RETURN_NONE;
 }
@@ -2490,19 +3040,26 @@ WRAP1B(erase_in_line, 0)
 WRAP1B(erase_in_display, 0)
 WRAP0(scroll_until_cursor)
 
+/**
+ * Pythonオブジェクトにgetter/setterを生やすマクロ
+ * TODO: MODEって何を意味する？
+ *  - setter: "{name}_set" という名前のメソッド
+ *  - getter: "{name}_get" という名前のメソッド
+ */
 #define MODE_GETSET(name, uname) \
-    static PyObject *name ## _get(Screen * self, \
-                                  void UNUSED * closure) {PyObject *ans = self->modes.m ## uname ? Py_True : Py_False; \
-                                                          Py_INCREF(ans); return ans;} \
-    static int name ## _set(Screen * self, PyObject * val, void UNUSED * closure) {if (val == NULL) {PyErr_SetString( \
-                                                                                                         PyExc_TypeError, \
-                                                                                                         "Cannot delete attribute"); \
-                                                                                                     return -1; \
-                                                                                   } set_mode_from_const(self, \
-                                                                                                         uname, \
-                                                                                                         PyObject_IsTrue( \
-                                                                                                             val) ? true : false); \
-                                                                                   return 0;}
+    static PyObject *name ## _get(Screen * self, void UNUSED * closure) { \
+        PyObject *ans = self->modes.m ## uname ? Py_True : Py_False; \
+        Py_INCREF(ans); \
+        return ans; \
+    } \
+    static int name ## _set(Screen * self, PyObject * val, void UNUSED * closure) { \
+        if (val == NULL) { \
+            PyErr_SetString(PyExc_TypeError, "Cannot delete attribute"); \
+            return -1; \
+        } \
+        set_mode_from_const(self, uname, PyObject_IsTrue(val) ? true : false); \
+        return 0; \
+    }
 
 MODE_GETSET(in_bracketed_paste_mode, BRACKETED_PASTE)
 MODE_GETSET(extended_keyboard, EXTENDED_KEYBOARD)
@@ -2511,6 +3068,13 @@ MODE_GETSET(auto_repeat_enabled, DECARM)
 MODE_GETSET(cursor_visible, DECTCEM)
 MODE_GETSET(cursor_key_mode, DECCKM)
 
+/**
+ * `disable_ligatures` プロパティのgetter - Pythonインターフェイス
+ *
+ * \param[in] screen Screenオブジェクト
+ * \param[in] closure 未使用
+ * \return "never" または "cursor" または "always"
+ */
 static PyObject *disable_ligatures_get(Screen * self, void UNUSED * closure) {
     const char *ans = NULL;
 
@@ -2528,8 +3092,16 @@ static PyObject *disable_ligatures_get(Screen * self, void UNUSED * closure) {
     return PyUnicode_FromString(ans);
 }
 
+/**
+ * `disable_ligatures` プロパティのsetter - Pythonインターフェイス
+ *
+ * \param[in] screen Screenオブジェクト
+ * \param[in] val 値
+ * \param[in] closure 未使用
+ * \return "never" または "cursor" または "always"
+ */
 static int disable_ligatures_set(Screen *self, PyObject *val, void UNUSED *closure) {
-    if (val == NULL) {
+    if (!val) {
         PyErr_SetString(PyExc_TypeError, "Cannot delete attribute");
         return -1;
     }
@@ -2540,20 +3112,20 @@ static int disable_ligatures_set(Screen *self, PyObject *val, void UNUSED *closu
     if (PyUnicode_READY(val) != 0) {
         return -1;
     }
-    const char *q = PyUnicode_AsUTF8(val);
-    DisableLigature dl = DISABLE_LIGATURES_NEVER;
-    if (strcmp(q, "always") == 0) {
-        dl = DISABLE_LIGATURES_ALWAYS;
+    const char *cstring = PyUnicode_AsUTF8(val);
+    DisableLigature raw = DISABLE_LIGATURES_NEVER;
+    if (strcmp(cstring, "always") == 0) {
+        raw = DISABLE_LIGATURES_ALWAYS;
     }
-    else if (strcmp(q, "cursor") == 0) {
-        dl = DISABLE_LIGATURES_CURSOR;
+    else if (strcmp(cstring, "cursor") == 0) {
+        raw = DISABLE_LIGATURES_CURSOR;
     }
-    if (dl != self->disable_ligatures) {
-        self->disable_ligatures = dl;
+    if (raw != self->disable_ligatures) {
+        self->disable_ligatures = raw;
         screen_dirty_sprite_positions(self);
     }
     return 0;
-} /* disable_ligatures_set */
+}
 
 static PyObject *
 cursor_up(Screen *self, PyObject *args) {
@@ -2942,27 +3514,30 @@ paste(Screen *self, PyObject *bytes) {
 }
 
 WRAP2(cursor_position, 1, 1)
+WRAP1(insert_lines, 1)
+WRAP1(delete_lines, 1)
+WRAP1(insert_characters, 1)
+WRAP1(delete_characters, 1)
+WRAP1(erase_characters, 1)
+WRAP1(cursor_up1, 1)
+WRAP1(cursor_down, 1)
+WRAP1(cursor_down1, 1)
+WRAP1(cursor_forward, 1)
 
-#define COUNT_WRAP(name) WRAP1(name, 1)
-COUNT_WRAP(insert_lines)
-COUNT_WRAP(delete_lines)
-COUNT_WRAP(insert_characters)
-COUNT_WRAP(delete_characters)
-COUNT_WRAP(erase_characters)
-COUNT_WRAP(cursor_up1)
-COUNT_WRAP(cursor_down)
-COUNT_WRAP(cursor_down1)
-COUNT_WRAP(cursor_forward)
-
+/**
+ * 幅広文字の幅を得る - Pythonモジュール
+ */
 static PyObject *
-wcwidth_wrap(PyObject UNUSED * self, PyObject * chr) {
+wcwidth_wrap(PyObject UNUSED *self, PyObject *chr) {
     return PyLong_FromLong(wcwidth_std(PyLong_AsLong(chr)));
 }
 
+/**
+ * 文字コードが絵文字かどうかを判定する - Pythonモジュール
+ */
 static PyObject *
 screen_is_emoji_presentation_base(PyObject UNUSED *self, PyObject *code_) {
-    unsigned long code = PyLong_AsUnsignedLong(code_);
-
+    const unsigned long code = PyLong_AsUnsignedLong(code_);
     if (is_emoji_presentation_base(code)) {
         Py_RETURN_TRUE;
     }
@@ -2970,7 +3545,6 @@ screen_is_emoji_presentation_base(PyObject UNUSED *self, PyObject *code_) {
 }
 
 #define MND(name, args) {#name, (PyCFunction)name, args, #name},
-#define MODEFUNC(name)  MND(name, METH_NOARGS) MND(set_ ## name, METH_O)
 
 static PyMethodDef methods[] = {
     MND(line,                       METH_O)
@@ -2997,9 +3571,8 @@ static PyMethodDef methods[] = {
     MND(cursor_up1,                 METH_VARARGS)
     MND(cursor_down,                METH_VARARGS)
     MND(cursor_down1,               METH_VARARGS)
-    MND(cursor_forward,             METH_VARARGS)              {
-        "index",                    (PyCFunction)xxx_index, METH_VARARGS, ""
-    },
+    MND(cursor_forward,             METH_VARARGS)
+    {"index", (PyCFunction)xxx_index, METH_VARARGS, ""},
     MND(set_pending_timeout,        METH_O)
     MND(as_text,                    METH_VARARGS)
     MND(as_text_non_visual,         METH_VARARGS)
@@ -3024,11 +3597,9 @@ static PyMethodDef methods[] = {
     MND(toggle_alt_screen,          METH_NOARGS)
     MND(reset_callbacks,            METH_NOARGS)
     MND(paste,                      METH_O)
-    MND(copy_colors_from,           METH_O)                    {
-        "select_graphic_rendition", (PyCFunction)_select_graphic_rendition, METH_VARARGS, ""
-    },
-
-    {NULL}  /* Sentinel */
+    MND(copy_colors_from,           METH_O)
+    {"select_graphic_rendition", (PyCFunction)_select_graphic_rendition, METH_VARARGS, ""},
+    {NULL}
 };
 
 static PyGetSetDef getsetters[] = {
@@ -3038,9 +3609,8 @@ static PyGetSetDef getsetters[] = {
     GETSET(focus_tracking_enabled)
     GETSET(cursor_visible)
     GETSET(cursor_key_mode)
-    GETSET(disable_ligatures){
-        NULL
-    }       /* Sentinel */
+    GETSET(disable_ligatures)
+    {NULL} /* Sentinel */
 };
 
 #if UINT_MAX == UINT32_MAX
@@ -3052,45 +3622,19 @@ static PyGetSetDef getsetters[] = {
 #endif
 
 static PyMemberDef members[] = {
-    {"callbacks",                T_OBJECT_EX,                    offsetof(Screen,                         callbacks),
-     0,
-     "callbacks"                                                                                                                                                                                                                                                                                                                                                                                                                     },
-    {"cursor",                   T_OBJECT_EX,                    offsetof(Screen,                         cursor),
-     READONLY,
-     "cursor"                                                                                                                                                                                                                                                                                                                                                                                                                                                                          },
-    {"grman",                    T_OBJECT_EX,                    offsetof(Screen,                         grman),
-     READONLY,
-     "grman"                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              },
-    {"color_profile",            T_OBJECT_EX,                    offsetof(Screen,                         color_profile),
-     READONLY,
-     "color_profile"                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        },
-    {"linebuf",                  T_OBJECT_EX,                    offsetof(Screen,                         linebuf),
-     READONLY,
-     "linebuf"                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                },
-    {"main_linebuf",             T_OBJECT_EX,                    offsetof(Screen,                         main_linebuf),
-     READONLY,
-     "main_linebuf"                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             },
-    {"historybuf",               T_OBJECT_EX,                    offsetof(Screen,                         historybuf),
-     READONLY,
-     "historybuf"                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 },
-    {"scrolled_by",              T_UINT,                         offsetof(Screen,                         scrolled_by),
-     READONLY,
-     "scrolled_by"                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  },
-    {"lines",                    T_UINT,                         offsetof(Screen,                         lines),
-     READONLY,
-     "lines"                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          },
-    {"columns",                  T_UINT,                         offsetof(Screen,                         columns),
-     READONLY,
-     "columns"                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        },
-    {"margin_top",               T_UINT,                         offsetof(Screen,                         margin_top),
-     READONLY,
-     "margin_top"                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  },
-    {"margin_bottom",            T_UINT,                         offsetof(Screen,                         margin_bottom),
-     READONLY,
-     "margin_bottom"                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         },
-    {"history_line_added_count", T_UINT,                         offsetof(Screen,
-                                                                          history_line_added_count),                        0,
-     "history_line_added_count"                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           },
+    {"callbacks",                T_OBJECT_EX, offsetof(Screen, callbacks),                  0,          "callbacks"},
+    {"cursor",                   T_OBJECT_EX, offsetof(Screen, cursor),                     READONLY,   "cursor"},
+    {"grman",                    T_OBJECT_EX, offsetof(Screen, grman),                      READONLY,   "grman"},
+    {"color_profile",            T_OBJECT_EX, offsetof(Screen, color_profile),              READONLY,   "color_profile"},
+    {"linebuf",                  T_OBJECT_EX, offsetof(Screen, linebuf),                    READONLY,   "linebuf"},
+    {"main_linebuf",             T_OBJECT_EX, offsetof(Screen, main_linebuf),               READONLY,   "main_linebuf"},
+    {"historybuf",               T_OBJECT_EX, offsetof(Screen, historybuf),                 READONLY,   "historybuf"},
+    {"scrolled_by",              T_UINT,      offsetof(Screen, scrolled_by),                READONLY,   "scrolled_by"},
+    {"lines",                    T_UINT,      offsetof(Screen, lines),                      READONLY,   "lines"},
+    {"columns",                  T_UINT,      offsetof(Screen, columns),                    READONLY,   "columns"},
+    {"margin_top",               T_UINT,      offsetof(Screen, margin_top),                 READONLY,   "margin_top"},
+    {"margin_bottom",            T_UINT,      offsetof(Screen, margin_bottom),              READONLY,   "margin_bottom"},
+    {"history_line_added_count", T_UINT,      offsetof(Screen, history_line_added_count),   0,          "history_line_added_count"},
     {NULL}
 };
 
@@ -3108,15 +3652,11 @@ PyTypeObject Screen_Type = {
 };
 
 static PyMethodDef module_methods[] = {
-    {"wcwidth",                    (PyCFunction)wcwidth_wrap,                      METH_O,
-     ""                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    },
-    {"wcswidth",                   (PyCFunction)screen_wcswidth,                   METH_O,
-     ""                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          },
-    {"is_emoji_presentation_base", (PyCFunction)screen_is_emoji_presentation_base, METH_O,
-     ""                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         },
-    {"truncate_point_for_length",  (PyCFunction)screen_truncate_point_for_length,  METH_VARARGS,
-     ""                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         },
-    {NULL}  /* Sentinel */
+    {"wcwidth",                    (PyCFunction)wcwidth_wrap,                      METH_O, ""},
+    {"wcswidth",                   (PyCFunction)screen_wcswidth,                   METH_O, ""},
+    {"is_emoji_presentation_base", (PyCFunction)screen_is_emoji_presentation_base, METH_O, ""},
+    {"truncate_point_for_length",  (PyCFunction)screen_truncate_point_for_length,  METH_VARARGS, ""},
+    {NULL}
 };
 
 INIT_TYPE(Screen)

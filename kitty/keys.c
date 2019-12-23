@@ -111,6 +111,9 @@ check_if_special(int key, int mods, int native_key) {
     return special;
 }
 
+/**
+ * IME位置を更新する
+ */
 static inline void
 update_ime_position(OSWindow *os_window, Window* w, Screen *screen) {
     unsigned int cell_width = os_window->fonts_data->cell_width, cell_height = os_window->fonts_data->cell_height;

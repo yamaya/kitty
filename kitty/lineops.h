@@ -92,45 +92,59 @@ void historybuf_refresh_sprite_positions(HistoryBuf *self);
 void historybuf_clear(HistoryBuf *self);
 
 
-#define as_text_generic(args, container, get_line, lines, columns) { \
-    PyObject *callback; \
-    int as_ansi = 0, insert_wrap_markers = 0; \
-    if (!PyArg_ParseTuple(args, "O|pp", &callback, &as_ansi, &insert_wrap_markers)) return NULL; \
-    PyObject *ret = NULL, *t = NULL; \
-    Py_UCS4 *buf = NULL; \
-    PyObject *nl = PyUnicode_FromString("\n"); \
-    PyObject *cr = PyUnicode_FromString("\r"); \
-    const GPUCell *prev_cell = NULL; \
-    if (nl == NULL || cr == NULL) goto end; \
-    if (as_ansi) { \
-        buf = malloc(sizeof(Py_UCS4) * columns * 100); \
-        if (buf == NULL) { PyErr_NoMemory(); goto end; } \
-    } \
-    for (index_type y = 0; y < lines; y++) { \
-        Line *line = get_line(container, y); \
-        if (!line->continued && y > 0) { \
-            ret = PyObject_CallFunctionObjArgs(callback, nl, NULL); \
-            if (ret == NULL) goto end; \
-            Py_CLEAR(ret); \
-        } \
+/**
+ * `as_text` 汎用処理マクロ
+ *
+ * \param[in] args Pythonインターフェイス関数の引数
+ * \param[in] container Screenオブジェクト
+ * \param[in] get_line 行取得関数
+ * \param[in] lines 行数
+ * \param[in] columns 列数
+ */
+#define as_text_generic(args, container, get_line, lines, columns) \
+    do { \
+        PyObject *callback; \
+        int as_ansi = 0, insert_wrap_markers = 0; \
+        if (!PyArg_ParseTuple(args, "O|pp", &callback, &as_ansi, &insert_wrap_markers)) return NULL; \
+        PyObject *ret = NULL, *t = NULL; \
+        Py_UCS4 *buf = NULL; \
+        PyObject *nl = PyUnicode_FromString("\n"); \
+        PyObject *cr = PyUnicode_FromString("\r"); \
+        const GPUCell *prev_cell = NULL; \
+        if (!nl || !cr) goto end; \
         if (as_ansi) { \
-            bool truncated; \
-            index_type num = line_as_ansi(line, buf, columns * 100 - 2, &truncated, &prev_cell); \
-            t = PyUnicode_FromKindAndData(PyUnicode_4BYTE_KIND, buf, num); \
-        } else { \
-            t = line_as_unicode(line); \
+            buf = malloc(sizeof(Py_UCS4) * columns * 100); \
+            if (!buf) { PyErr_NoMemory(); goto end; } \
         } \
-        if (t == NULL) goto end; \
-        ret = PyObject_CallFunctionObjArgs(callback, t, NULL); \
-        Py_DECREF(t); if (ret == NULL) goto end; Py_DECREF(ret); \
-        if (insert_wrap_markers) { \
-            ret = PyObject_CallFunctionObjArgs(callback, cr, NULL); \
-            if (ret == NULL) goto end; \
-            Py_CLEAR(ret); \
-        }\
-    } \
-end: \
-    Py_CLEAR(nl); Py_CLEAR(cr); free(buf); \
-    if (PyErr_Occurred()) return NULL; \
-    Py_RETURN_NONE; \
-}
+        for (index_type y = 0; y < lines; y++) { \
+            Line *line = get_line(container, y); \
+            if (!line->continued && y > 0) { \
+                ret = PyObject_CallFunctionObjArgs(callback, nl, NULL); \
+                if (!ret) goto end; \
+                Py_CLEAR(ret); \
+            } \
+            if (as_ansi) { \
+                bool truncated; \
+                index_type num = line_as_ansi(line, buf, columns * 100 - 2, &truncated, &prev_cell); \
+                t = PyUnicode_FromKindAndData(PyUnicode_4BYTE_KIND, buf, num); \
+            } else { \
+                t = line_as_unicode(line); \
+            } \
+            if (!t) goto end; \
+            ret = PyObject_CallFunctionObjArgs(callback, t, NULL); \
+            Py_DECREF(t); \
+            if (!ret) goto end; \
+            Py_DECREF(ret); \
+            if (insert_wrap_markers) { \
+                ret = PyObject_CallFunctionObjArgs(callback, cr, NULL); \
+                if (!ret) goto end; \
+                Py_CLEAR(ret); \
+            }\
+        } \
+    end: \
+        Py_CLEAR(nl); \
+        Py_CLEAR(cr); \
+        free(buf); \
+        if (PyErr_Occurred()) return NULL; \
+        Py_RETURN_NONE; \
+    } while (false)

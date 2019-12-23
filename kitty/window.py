@@ -48,6 +48,21 @@ DYNAMIC_COLOR_CODES.update({k+100: v for k, v in DYNAMIC_COLOR_CODES.items()})
 
 
 def calculate_gl_geometry(window_geometry, viewport_width, viewport_height, cell_width, cell_height):
+    """OpenGLジオメトリを計算する
+
+    dx: セル幅x2 / viewport_width ... 🤔
+    dy: セル高x2 / viewport_height ... 🤔
+
+    Args:
+        window_geometry: ウィンドウジオメトリ
+        viewport_width: ビューポートの幅
+        viewport_height: ビューポートの高
+        cell_width: セル幅
+        cell_height: セル高
+
+    Returns: ScreenGeometryオブジェクト
+    """
+
     dx, dy = 2 * cell_width / viewport_width, 2 * cell_height / viewport_height
     xmargin = window_geometry.left / viewport_width
     ymargin = window_geometry.top / viewport_height
@@ -130,6 +145,8 @@ def text_sanitizer(as_ansi, add_wrap_markers):
 
 
 class Window:
+    """ウィンドウ
+    """
 
     def __init__(self, tab, child, opts, args, override_title=None, copy_colors_from=None):
         self.action_on_close = self.action_on_removal = None
@@ -156,7 +173,10 @@ class Window:
         self.needs_layout = True
         self.is_visible_in_layout = True
         self.child, self.opts = child, opts
+        # セルのサイズを得る
         cell_width, cell_height = cell_size_for_window(self.os_window_id)
+        # 80x24 のスクリーンを生成する
+        # - callbackは自分自身を登録する
         self.screen = Screen(self, 24, 80, opts.scrollback_lines, cell_width, cell_height, self.id)
         if copy_colors_from is not None:
             self.screen.copy_colors_from(copy_colors_from.screen)
@@ -285,7 +305,7 @@ class Window:
         self.override_title = title or None
         self.title_updated()
 
-    # screen callbacks {{{
+    # スクリーンのコールバック関数 {{{
     def use_utf8(self, on):
         get_boss().child_monitor.set_iutf8_winid(self.id, on)
 

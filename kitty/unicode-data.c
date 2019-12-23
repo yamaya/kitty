@@ -7,7 +7,7 @@ START_ALLOW_CASE_RANGE
 #include "unicode-data.h"
 bool
 is_combining_char(char_type code) {
-	// M category (marks) (2274 codepoints) {{{
+	// M類(marks) (2274 codepoints) {{{
 	switch(code) {
 		case 0x300 ... 0x36f:
 			return true;
@@ -2504,6 +2504,9 @@ char_type codepoint_for_mark(combining_type m) {
 	return 0;
 }
 
+/**
+ * TODO: 謎
+ */
 combining_type mark_for_codepoint(char_type c) {
 	switch(c) { // {{{
 		case 0: return 0;

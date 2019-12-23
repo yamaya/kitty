@@ -416,7 +416,7 @@ cell_update_uniform_block(ssize_t vao_idx,
  * @param ystart 開始位置のy座標
  * @param dx 横幅?
  * @param dy 高さ?
- * @param fonts_data ？？？？
+ * @param fonts_data FONTS_DATA_HANDLE
  */
 static inline bool
 cell_prepare_to_render(ssize_t vao_idx,
@@ -718,6 +718,7 @@ blank_canvas(float background_opacity, color_type color) {
  * @param screen スクリーン
  * @param os_window OSウィンドウ
  * @return 変更があったか否か
+ * \note child-monitor.c の prepare_to_render_os_window から呼ばれる
  */
 bool
 send_cell_data_to_gpu(ssize_t vao_idx,

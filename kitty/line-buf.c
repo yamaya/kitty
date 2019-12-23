@@ -112,14 +112,29 @@ dealloc(LineBuf* self) {
     Py_TYPE(self)->tp_free((PyObject*)self);
 }
 
+/**
+ * 行を行バッファの内容で初期化する
+ *  と言ってもCPU/GPUセルだけ何だよなぁ
+ *
+ * \param[in] self 行バッファ
+ * \param[in] l 行
+ * \param[in] ynum 対象となる行のインデックス
+ */
 static inline void
 init_line(LineBuf *lb, Line *l, index_type ynum) {
     l->cpu_cells = cpu_lineptr(lb, ynum);
     l->gpu_cells = gpu_lineptr(lb, ynum);
 }
 
+/**
+ * 行バッファの行を初期化する
+ *
+ * \param[in] self 行バッファ
+ * \param[in] idx 対象となる行のインデックス
+ */
 void
 linebuf_init_line(LineBuf *self, index_type idx) {
+    // 行バッファの内容を行に反映する
     self->line->ynum = idx;
     self->line->xnum = self->xnum;
     self->line->continued = self->line_attrs[idx] & CONTINUED_MASK ? true : false;

@@ -61,7 +61,9 @@ typedef struct {
     index_type xstart, ynum, xnum;
 } OverlayLine;
 
-
+/**
+ * スクリーン
+ */
 typedef struct {
     PyObject_HEAD
 

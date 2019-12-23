@@ -157,7 +157,7 @@ class TabBar:
         self.data_buffer_size = 0
         self.laid_out_once = False
         self.dirty = True
-        self.screen = s = Screen(None, 1, 10, 0, self.cell_width, cell_height)
+        self.screen = s = Screen(None, 1, 10, 0, self.cell_width, cell_height) # 1行10桁のスクリーンを作成する
         s.color_profile.update_ansi_color_table(build_ansi_color_table(opts))
         s.color_profile.set_configured_colors(
             color_as_int(opts.inactive_tab_foreground),
@@ -228,7 +228,11 @@ class TabBar:
             self.blank_rects = (Rect(0, g.top, g.left, g.bottom + 1), Rect(g.right - 1, g.top, viewport_width, g.bottom + 1))
         else:
             self.blank_rects = ()
+
+        # スクリーン幾何を計算する
         self.screen_geometry = sg = calculate_gl_geometry(g, vw, vh, cell_width, cell_height)
+
+        # タブバーレンダリングデータを設定する
         set_tab_bar_render_data(self.os_window_id, sg.xstart, sg.ystart, sg.dx, sg.dy, self.screen)
 
     def update(self, data):

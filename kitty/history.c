@@ -32,17 +32,37 @@ segment_for(HistoryBuf *self, index_type y) {
     return seg_num;
 }
 
+/**
+ * yが示す行を含むセグメントを得るマクロ
+ *
+ * \param[in] which セル
+ * \param[in] stride ストライド
+ */
 #define seg_ptr(which, stride) { \
     index_type seg_num = segment_for(self, y); \
     y -= seg_num * SEGMENT_SIZE; \
     return self->segments[seg_num].which + y * stride; \
 }
 
+/**
+ * 行のCPUセルを得る
+ *
+ * \param[in] self 履歴バッファ
+ * \param[in] y 行インデックス
+ * \return CPUセル配列の先頭
+ */
 static inline CPUCell*
 cpu_lineptr(HistoryBuf *self, index_type y) {
     seg_ptr(cpu_cells, self->xnum);
 }
 
+/**
+ * 行のGPUセルを得る
+ *
+ * \param[in] self 履歴バッファ
+ * \param[in] y 行インデックス
+ * \return GPUセル配列の先頭
+ */
 static inline GPUCell*
 gpu_lineptr(HistoryBuf *self, index_type y) {
     seg_ptr(gpu_cells, self->xnum);
@@ -132,29 +152,61 @@ dealloc(HistoryBuf* self) {
     Py_TYPE(self)->tp_free((PyObject*)self);
 }
 
+/**
+ * 行番号から行インデックスを得る
+ *
+ * \param[in] self 履歴バッファ
+ * \param[in] lnum 行番号
+ */
 static inline index_type
 index_of(HistoryBuf *self, index_type lnum) {
-    // The index (buffer position) of the line with line number lnum
-    // This is reverse indexing, i.e. lnum = 0 corresponds to the *last* line in the buffer.
-    if (self->count == 0) return 0;
-    index_type idx = self->count - 1 - MIN(self->count - 1, lnum);
-    return (self->start_of_data + idx) % self->ynum;
+    if (self->count == 0) {
+        return 0;
+    }
+
+    // 行番号を逆にするとインデックスになる
+    const index_type i = self->count - 1 - MIN(self->count - 1, lnum);
+    return (self->start_of_data + i) % self->ynum;
 }
 
+/**
+ * 行を初期化する
+ *
+ * \param[in] self 履歴バッファ
+ * \param[in] index 行インデックス
+ * \param[in] line 行 [out]
+ */
 static inline void
-init_line(HistoryBuf *self, index_type num, Line *l) {
-    // Initialize the line l, setting its pointer to the offsets for the line at index (buffer position) num
-    l->cpu_cells = cpu_lineptr(self, num);
-    l->gpu_cells = gpu_lineptr(self, num);
-    l->continued = *attrptr(self, num) & CONTINUED_MASK;
-    l->has_dirty_text = *attrptr(self, num) & TEXT_DIRTY_MASK ? true : false;
+init_line(HistoryBuf *self, index_type index, Line *line) {
+    // CPU/GPUセルをセットする
+    line->cpu_cells = cpu_lineptr(self, index);
+    line->gpu_cells = gpu_lineptr(self, index);
+
+    // 継続マークの引継ぎ
+    line->continued = *attrptr(self, index) & CONTINUED_MASK;
+
+    // dirty状態の引継ぎ
+    line->has_dirty_text = *attrptr(self, index) & TEXT_DIRTY_MASK ? true : false;
 }
 
+/**
+ * 履歴バッファの行を初期化する
+ *
+ * \param[in] self 履歴バッファ
+ * \param[in] lnum 行番号
+ * \param[in] line 行
+ */
 void
-historybuf_init_line(HistoryBuf *self, index_type lnum, Line *l) {
-    init_line(self, index_of(self, lnum), l);
+historybuf_init_line(HistoryBuf *self, index_type lnum, Line *line) {
+    init_line(self, index_of(self, lnum), line);
 }
 
+/**
+ * 履歴バッファの行のdirty状態をクリアする
+ *
+ * \param[in] self 履歴バッファ
+ * \param[in] y 行番号
+ */
 void
 historybuf_mark_line_clean(HistoryBuf *self, index_type y) {
     line_attrs_type *p = attrptr(self, index_of(self, y));

@@ -8,9 +8,12 @@
 #include "state.h"
 #include <math.h>
 
+/**
+ * TODO: グローバルぅぅぅ
+ */
 GlobalState global_state = {{0}};
 
-#define REMOVER(array, qid, count, destroy, capacity) { \
+#define REMOVER(array, qid, count, destroy, capacity) do { \
     for (size_t i = 0; i < count; i++) { \
         if (array[i].id == qid) { \
             destroy(array + i); \
@@ -18,12 +21,14 @@ GlobalState global_state = {{0}};
             remove_i_from_array(array, i, count); \
             break; \
         } \
-    }}
+    } \
+} while (false)
 
 #define WITH_OS_WINDOW(os_window_id) \
     for (size_t o = 0; o < global_state.num_os_windows; o++) { \
         OSWindow *os_window = global_state.os_windows + o; \
         if (os_window->id == os_window_id) {
+
 #define END_WITH_OS_WINDOW break; }}
 
 #define WITH_TAB(os_window_id, tab_id) \
@@ -33,6 +38,7 @@ GlobalState global_state = {{0}};
             for (size_t t = 0; t < osw->num_tabs; t++) { \
                 if (osw->tabs[t].id == tab_id) { \
                     Tab *tab = osw->tabs + t;
+
 #define END_WITH_TAB break; }}}}
 
 #define WITH_OS_WINDOW_REFS \
@@ -44,8 +50,10 @@ GlobalState global_state = {{0}};
         global_state.callback_os_window = NULL; \
         for (size_t wn = 0; wn < global_state.num_os_windows; wn++) { \
             OSWindow *wp = global_state.os_windows + wn; \
-            if (wp->id == cb_window_id && cb_window_id) global_state.callback_os_window = wp; \
-    }}
+            if (wp->id == cb_window_id && cb_window_id) \
+                global_state.callback_os_window = wp; \
+        } \
+    }
 
 
 OSWindow*
@@ -191,7 +199,13 @@ detach_window(id_type os_window_id, id_type tab_id, id_type id) {
     END_WITH_TAB;
 }
 
-
+/**
+ * スクリーンのリサイズ
+ *
+ * \param[in] os_window OSウィンドウ
+ * \param[in] screen スクリーン
+ * \param[in] has_graphics グラフィックを保有しているか
+ */
 static inline void
 resize_screen(OSWindow *os_window, Screen *screen, bool has_graphics) {
     if (screen) {
@@ -327,21 +341,22 @@ add_borders_rect(id_type os_window_id, id_type tab_id, uint32_t left, uint32_t t
 void
 os_window_regions(OSWindow *os_window, Region *central, Region *tab_bar) {
     if (!global_state.tab_bar_hidden && os_window->num_tabs >= OPT(tab_bar_min_tabs)) {
-        switch(OPT(tab_bar_edge)) {
-            case TOP_EDGE:
-                central->left = 0; central->top = os_window->fonts_data->cell_height; central->right = os_window->viewport_width - 1;
-                central->bottom = os_window->viewport_height - 1;
-                tab_bar->left = central->left; tab_bar->right = central->right; tab_bar->top = 0;
-                tab_bar->bottom = central->top - 1;
-                break;
-            default:
-                central->left = 0; central->top = 0; central->right = os_window->viewport_width - 1;
-                central->bottom = os_window->viewport_height - os_window->fonts_data->cell_height - 1;
-                tab_bar->left = central->left; tab_bar->right = central->right; tab_bar->top = central->bottom + 1;
-                tab_bar->bottom = os_window->viewport_height - 1;
-                break;
+        switch (OPT(tab_bar_edge)) {
+        case TOP_EDGE:
+            central->left = 0; central->top = os_window->fonts_data->cell_height; central->right = os_window->viewport_width - 1;
+            central->bottom = os_window->viewport_height - 1;
+            tab_bar->left = central->left; tab_bar->right = central->right; tab_bar->top = 0;
+            tab_bar->bottom = central->top - 1;
+            break;
+        default:
+            central->left = 0; central->top = 0; central->right = os_window->viewport_width - 1;
+            central->bottom = os_window->viewport_height - os_window->fonts_data->cell_height - 1;
+            tab_bar->left = central->left; tab_bar->right = central->right; tab_bar->top = central->bottom + 1;
+            tab_bar->bottom = os_window->viewport_height - 1;
+            break;
         }
-    } else {
+    }
+    else {
         zero_at_ptr(tab_bar);
         central->left = 0; central->top = 0; central->right = os_window->viewport_width - 1;
         central->bottom = os_window->viewport_height - 1;
@@ -351,7 +366,13 @@ os_window_regions(OSWindow *os_window, Region *central, Region *tab_bar) {
 
 // Python API {{{
 #define PYWRAP0(name) static PyObject* py##name(PYNOARG)
-#define PYWRAP1(name) static PyObject* py##name(PyObject UNUSED *self, PyObject *args)
+
+/**
+ * Python インターフェイスを定義するマクロ
+ */
+#define PYWRAP1(name) \
+    static PyObject* py##name(PyObject UNUSED *self, PyObject *args)
+
 #define PA(fmt, ...) if(!PyArg_ParseTuple(args, fmt, __VA_ARGS__)) return NULL;
 #define ONE_UINT(name) PYWRAP1(name) { name((unsigned int)PyLong_AsUnsignedLong(args)); Py_RETURN_NONE; }
 #define TWO_UINT(name) PYWRAP1(name) { unsigned int a, b; PA("II", &a, &b); name(a, b); Py_RETURN_NONE; }
@@ -563,6 +584,9 @@ PYWRAP1(set_options) {
 
 BOOL_SET(in_sequence_mode)
 
+/**
+ * タブバーレンダリングデータの設定
+ */
 PYWRAP1(set_tab_bar_render_data) {
     ScreenRenderData d = {0};
     id_type os_window_id;
@@ -596,6 +620,9 @@ wrap_region(Region *r) {
     return ans;
 }
 
+/**
+ * ウィンドウのビューポート情報を返す
+ */
 PYWRAP1(viewport_for_window) {
     id_type os_window_id;
     int vw = 100, vh = 100;
@@ -612,6 +639,10 @@ end:
     return Py_BuildValue("NNiiII", wrap_region(&central), wrap_region(&tab_bar), vw, vh, cell_width, cell_height);
 }
 
+/**
+ * ウィンドウのセルサイズを取得する
+ *  OSウィンドウのフォントデータから引っ張ってくる
+ */
 PYWRAP1(cell_size_for_window) {
     id_type os_window_id;
     unsigned int cell_width = 0, cell_height = 0;
@@ -770,6 +801,8 @@ PYWRAP1(os_window_font_size) {
     WITH_OS_WINDOW(os_window_id)
         if (new_sz > 0 && (force || new_sz != os_window->font_sz_in_pts)) {
             os_window->font_sz_in_pts = new_sz;
+            // フォントデータをロードする
+            // ここでセルサイズが決まる
             os_window->fonts_data = NULL;
             os_window->fonts_data = load_fonts_data(os_window->font_sz_in_pts, os_window->logical_dpi_x, os_window->logical_dpi_y);
             send_prerendered_sprites_for_window(os_window);

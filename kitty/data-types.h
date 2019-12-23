@@ -62,13 +62,21 @@ typedef uint32_t pixel;
 typedef unsigned int index_type;
 typedef uint16_t sprite_index;
 typedef uint16_t attrs_type;
+
+/**
+ * 行属性型
+ */
 typedef uint8_t line_attrs_type;
+
+/**
+ * カーソル形状
+ */
 typedef enum CursorShapes {
-    NO_CURSOR_SHAPE,
-    CURSOR_BLOCK,
-    CURSOR_BEAM,
-    CURSOR_UNDERLINE,
-    NUM_OF_CURSOR_SHAPES
+    NO_CURSOR_SHAPE, /** 形状なし */
+    CURSOR_BLOCK,   /** ブロック */
+    CURSOR_BEAM,   /** ビーム */
+    CURSOR_UNDERLINE,   /** アンダーライン */
+    NUM_OF_CURSOR_SHAPES   /** 種類数 */
 } CursorShape;
 
 /**
@@ -117,17 +125,37 @@ typedef enum {
 #define REVERSE_SHIFT            6
 #define STRIKE_SHIFT             7
 #define DIM_SHIFT                8
+
+/**
+ * 色マスク
+ */
 #define COL_MASK                 0xFFFFFFFF
+
 #define UTF8_ACCEPT              0
 #define UTF8_REJECT              1
 #define DECORATION_FG_CODE       58
 #define CHAR_IS_BLANK(ch) ((ch) == 32 || (ch) == 0)
+
+/**
+ * 行属性: 次行継続
+ */
 #define CONTINUED_MASK           1
+
+/**
+ * 行属性: テキストがdirty状態
+ */
 #define TEXT_DIRTY_MASK          2
 
 #define FG                       1
 #define BG                       2
 
+/**
+ * カーソルの状態を属性値に変換する
+ *
+ * \param[in] c Cursorオブジェクト
+ * \param[in] w 文字幅
+ * \return 属性値
+ */
 #define CURSOR_TO_ATTRS(c, w) \
     ((w) | (((c->decoration & 3) << DECORATION_SHIFT) | ((c->bold & 1) << BOLD_SHIFT) | \
             ((c->italic & 1) << ITALIC_SHIFT) | ((c->reverse & 1) << REVERSE_SHIFT) | \
@@ -156,6 +184,11 @@ typedef enum {
                                                                                     PyObject_IsTrue(value) ? true : false; \
                                                                                 return 0;}
 
+/**
+ * Pythonオブジェクトにgetter/setterを生やすマクロ
+ *  - setter: "{name}_set" という名前のメソッド
+ *  - getter: "{name}_get" という名前のメソッド
+ */
 #define GETSET(x) \
     {#x, (getter)x ## _get, (setter)x ## _set, #x, NULL},
 
@@ -201,42 +234,70 @@ typedef struct {
     uint32_t left, top, right, bottom;
 } Region;
 
+/**
+ * GPUセル
+ */
 typedef struct {
-    color_type fg, bg, decoration_fg;
-    sprite_index sprite_x, sprite_y, sprite_z;
-    attrs_type attrs;
+    color_type fg;  /** 前景色 */
+    color_type bg;  /** 背景色 */
+    color_type decoration_fg;   /** 装飾前景色 */
+    sprite_index sprite_x; /** スプライト位置 x */
+    sprite_index sprite_y; /** スプライト位置 y */
+    sprite_index sprite_z; /** スプライト位置 z */
+    attrs_type attrs;   /** 属性 */
 } GPUCell;
 
+/**
+ * CPUセル
+ */
 typedef struct {
-    char_type ch;
-    combining_type cc_idx[2];
+    char_type ch; /** 文字コード */
+    combining_type cc_idx[2]; /** 異体字セレクタ */
 } CPUCell;
 
+/**
+ * 行
+ */
 typedef struct {
     PyObject_HEAD
 
-    GPUCell *gpu_cells;
-    CPUCell *cpu_cells;
-    index_type xnum, ynum;
-    bool continued, needs_free, has_dirty_text;
+    GPUCell *gpu_cells; /** GPUセル配列 */
+    CPUCell *cpu_cells; /** CPUセル配列 */
+    index_type xnum;
+    index_type ynum; /** 行インデックス */
+    bool continued; /** 次行へ継続している */
+    bool needs_free; /** 解放が必要 */
+    bool has_dirty_text; /** dirtyなテキストを保持している */
 } Line;
 
+/**
+ * 行バッファ
+ */
 typedef struct {
     PyObject_HEAD
 
-    GPUCell *gpu_cell_buf;
-    CPUCell *cpu_cell_buf;
-    index_type xnum, ynum, *line_map, *scratch;
-    line_attrs_type *line_attrs;
-    Line *line;
+    GPUCell *gpu_cell_buf; /** GPUセル配列 */
+    CPUCell *cpu_cell_buf; /** CPUセル配列 */
+    index_type xnum;
+    index_type ynum;  /** 行インデックス */
+    index_type *line_map;
+    index_type *scratch;
+    line_attrs_type *line_attrs; /** 行属性 */
+    Line *line; /** 行バッファ */
 } LineBuf;
 
+/**
+ * 履歴バッファセグメント
+ */
 typedef struct {
     GPUCell *gpu_cells;
     CPUCell *cpu_cells;
     line_attrs_type *line_attrs;
 } HistoryBufSegment;
 
+/**
+ * 履歴バッファページャー
+ */
 typedef struct {
     index_type bufsize, maxsz;
     Py_UCS4 *buffer;
@@ -245,6 +306,9 @@ typedef struct {
     bool rewrap_needed;
 } PagerHistoryBuf;
 
+/**
+ * 履歴バッファ
+ */
 typedef struct {
     PyObject_HEAD
 
@@ -255,13 +319,45 @@ typedef struct {
     index_type start_of_data, count;
 } HistoryBuf;
 
+/**
+ * カーソル
+ */
 typedef struct {
     PyObject_HEAD
 
+    /**
+     * スタイル
+     *  - ボールド
+     *  - イタリック
+     *  - 反転
+     *  - 取り消し線
+     *  - 点滅
+     *  - 薄暗い
+     */
     bool bold, italic, reverse, strikethrough, blink, dim;
+
+    /**
+     * 位置
+     */
     unsigned int x, y;
+
+    /**
+     * デコレーション
+     *  TODO: 謎
+     */
     uint8_t decoration;
+
+    /**
+     * 形状
+     */
     CursorShape shape;
+
+    /**
+     * 色
+     *  - 前景色
+     *  - 背景色
+     *  - 装飾色
+     */
     color_type fg, bg, decoration_fg;
 } Cursor;
 
@@ -293,8 +389,23 @@ typedef struct {
 
 typedef struct {int x;
 } *SPRITE_MAP_HANDLE;
-#define FONTS_DATA_HEAD SPRITE_MAP_HANDLE sprite_map; double logical_dpi_x, logical_dpi_y, font_sz_in_pts; \
+
+#define FONTS_DATA_HEAD \
+    SPRITE_MAP_HANDLE sprite_map; \
+    double logical_dpi_x, logical_dpi_y; \
+    double font_sz_in_pts; \
     unsigned int cell_width, cell_height;
+
+/**
+ * フォントデータハンドル型
+ *
+ * - sprite_map: スプライトマップ
+ * - logical_dpi_x: 論理DPIのx
+ * - logical_dpi_x: 論理DPIのx
+ * - font_sz_in_pts: フォントポイントサイズ
+ * - cell_width: セル幅
+ * - cell_height: セル高
+ */
 typedef struct {FONTS_DATA_HEAD} *FONTS_DATA_HANDLE;
 
 #define PARSER_BUF_SZ   (8 * 1024)

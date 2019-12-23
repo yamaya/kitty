@@ -11,7 +11,14 @@
  */
 #define VS16 1281
 
+/**
+ * 文字コードが合成文字かどうか
+ *
+ * \param[in] ch 文字コード
+ * \return 真偽値
+ */
 bool is_combining_char(char_type ch);
+
 bool is_ignored_char(char_type ch);
 bool is_word_char(char_type ch);
 bool is_CZ_category(char_type);

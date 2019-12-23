@@ -11,8 +11,18 @@
 
 #define OPT(name) global_state.opts.name
 
-typedef enum { LEFT_EDGE, TOP_EDGE, RIGHT_EDGE, BOTTOM_EDGE } Edge;
-typedef enum { RESIZE_DRAW_STATIC, RESIZE_DRAW_SCALED, RESIZE_DRAW_BLANK, RESIZE_DRAW_SIZE } ResizeDrawStrategy;
+typedef enum {
+    LEFT_EDGE,
+    TOP_EDGE,
+    RIGHT_EDGE,
+    BOTTOM_EDGE
+} Edge;
+typedef enum {
+    RESIZE_DRAW_STATIC,
+    RESIZE_DRAW_SCALED,
+    RESIZE_DRAW_BLANK,
+    RESIZE_DRAW_SIZE
+} ResizeDrawStrategy;
 
 typedef struct {
     monotonic_t visual_bell_duration, cursor_blink_interval, cursor_stop_blinking_after, mouse_hide_wait, click_interval;
@@ -24,7 +34,8 @@ typedef struct {
     unsigned int terminal_select_modifiers;
     unsigned int url_style;
     unsigned int scrollback_pager_history_size;
-    char_type select_by_word_characters[256]; size_t select_by_word_characters_count;
+    char_type select_by_word_characters[256];
+    size_t select_by_word_characters_count;
     color_type url_color, background, foreground, active_border_color, inactive_border_color, bell_border_color;
     monotonic_t repaint_delay, input_delay;
     bool focus_follows_mouse, hide_window_decorations;
@@ -50,6 +61,9 @@ typedef struct {
     MouseShape pointer_shape_when_grabbed;
 } Options;
 
+/**
+ * スクリーンレンダリングデータ
+ */
 typedef struct {
     ssize_t vao_idx, gvao_idx;
     float xstart, ystart, dx, dy;
@@ -113,7 +127,11 @@ typedef struct {
     bool is_set;
 } OSWindowGeometry;
 
-enum RENDER_STATE { RENDER_FRAME_NOT_REQUESTED, RENDER_FRAME_REQUESTED, RENDER_FRAME_READY };
+enum RENDER_STATE {
+    RENDER_FRAME_NOT_REQUESTED,
+    RENDER_FRAME_REQUESTED,
+    RENDER_FRAME_READY
+};
 
 typedef struct {
     monotonic_t last_resize_event_at;
@@ -123,7 +141,9 @@ typedef struct {
     unsigned int width, height, num_of_resize_events;
 } LiveResizeInfo;
 
-
+/**
+ * OSウィンドウ
+ */
 typedef struct {
     void *handle;
     id_type id;
@@ -133,7 +153,12 @@ typedef struct {
     Tab *tabs;
     unsigned int active_tab, num_tabs, capacity, last_active_tab, last_num_tabs, last_active_window_id;
     bool focused_at_last_render, needs_render;
+
+    /**
+     * タブバーレンダリングデータ
+     */
     ScreenRenderData tab_bar_render_data;
+
     bool tab_bar_data_updated;
     bool is_focused;
     monotonic_t cursor_blink_zero_time, last_mouse_activity_at;
@@ -149,14 +174,18 @@ typedef struct {
     unsigned int clear_count;
     color_type last_titlebar_color;
     float background_opacity;
+
+    /**
+     * フォントデータ
+     */
     FONTS_DATA_HANDLE fonts_data;
+
     id_type temp_font_group_id;
     enum RENDER_STATE render_state;
     monotonic_t last_render_frame_received_at;
     id_type last_focused_counter;
     ssize_t gvao_idx;
 } OSWindow;
-
 
 typedef struct {
     Options opts;
@@ -174,16 +203,17 @@ typedef struct {
     bool in_sequence_mode;
     bool tab_bar_hidden;
     double font_sz_in_pts;
-    struct { double x, y; } default_dpi;
+    struct {double x, y;
+    } default_dpi;
     id_type active_drag_in_window;
 } GlobalState;
 
 extern GlobalState global_state;
 
 #define call_boss(name, ...) if (global_state.boss) { \
-    PyObject *cret_ = PyObject_CallMethod(global_state.boss, #name, __VA_ARGS__); \
-    if (cret_ == NULL) { PyErr_Print(); } \
-    else Py_DECREF(cret_); \
+        PyObject *cret_ = PyObject_CallMethod(global_state.boss, #name, __VA_ARGS__); \
+        if (cret_ == NULL) {PyErr_Print();} \
+        else Py_DECREF(cret_); \
 }
 
 void gl_init(void);
@@ -191,10 +221,10 @@ void remove_vao(ssize_t vao_idx);
 bool remove_os_window(id_type os_window_id);
 void make_os_window_context_current(OSWindow *w);
 void update_os_window_references(void);
-void mark_os_window_for_close(OSWindow* w, bool yes);
+void mark_os_window_for_close(OSWindow *w, bool yes);
 void update_os_window_viewport(OSWindow *window, bool);
-bool should_os_window_close(OSWindow* w);
-bool should_os_window_be_rendered(OSWindow* w);
+bool should_os_window_close(OSWindow *w);
+bool should_os_window_be_rendered(OSWindow *w);
 void wakeup_main_loop(void);
 void swap_window_buffers(OSWindow *w);
 void make_window_context_current(OSWindow *w);
@@ -203,45 +233,67 @@ bool is_mouse_hidden(OSWindow *w);
 void destroy_os_window(OSWindow *w);
 void focus_os_window(OSWindow *w, bool also_raise);
 void set_os_window_title(OSWindow *w, const char *title);
-OSWindow* os_window_for_kitty_window(id_type);
-OSWindow* add_os_window(void);
-OSWindow* current_os_window(void);
-void os_window_regions(OSWindow*, Region *main, Region *tab_bar);
-bool drag_scroll(Window *, OSWindow*);
-void draw_borders(ssize_t vao_idx, unsigned int num_border_rects, BorderRect *rect_buf, bool rect_data_is_dirty, uint32_t viewport_width, uint32_t viewport_height, color_type, unsigned int, bool, OSWindow *w);
+OSWindow * os_window_for_kitty_window(id_type);
+OSWindow * add_os_window(void);
+OSWindow * current_os_window(void);
+void os_window_regions(OSWindow *, Region *main, Region *tab_bar);
+bool drag_scroll(Window *, OSWindow *);
+void draw_borders(ssize_t vao_idx,
+                  unsigned int num_border_rects,
+                  BorderRect *rect_buf,
+                  bool rect_data_is_dirty,
+                  uint32_t viewport_width,
+                  uint32_t viewport_height,
+                  color_type,
+                  unsigned int,
+                  bool,
+                  OSWindow *w);
 ssize_t create_cell_vao(void);
 ssize_t create_graphics_vao(void);
 ssize_t create_border_vao(void);
 bool send_cell_data_to_gpu(ssize_t, ssize_t, float, float, float, float, Screen *, OSWindow *);
 void draw_cells(ssize_t, ssize_t, float, float, float, float, Screen *, OSWindow *, bool, bool);
-void draw_centered_alpha_mask(ssize_t gvao_idx, size_t screen_width, size_t screen_height, size_t width, size_t height, uint8_t *canvas);
+void draw_centered_alpha_mask(ssize_t gvao_idx,
+                              size_t screen_width,
+                              size_t screen_height,
+                              size_t width,
+                              size_t height,
+                              uint8_t *canvas);
 void update_surface_size(int, int, uint32_t);
-void free_texture(uint32_t*);
-void send_image_to_gpu(uint32_t*, const void*, int32_t, int32_t, bool, bool);
-void send_sprite_to_gpu(FONTS_DATA_HANDLE fg, unsigned int, unsigned int, unsigned int, pixel*);
+void free_texture(uint32_t *);
+void send_image_to_gpu(uint32_t *, const void *, int32_t, int32_t, bool, bool);
+void send_sprite_to_gpu(FONTS_DATA_HANDLE fg, unsigned int, unsigned int, unsigned int, pixel *);
 void blank_canvas(float, color_type);
 void blank_os_window(OSWindow *);
 void set_titlebar_color(OSWindow *w, color_type color);
 FONTS_DATA_HANDLE load_fonts_data(double, double, double);
 void send_prerendered_sprites_for_window(OSWindow *w);
+
 #ifdef __APPLE__
-void get_cocoa_key_equivalent(int, int, unsigned short*, int*);
+void get_cocoa_key_equivalent(int, int, unsigned short *, int *);
+
 typedef enum {
-    PREFERENCES_WINDOW = 1,
-    NEW_OS_WINDOW = 2,
+    PREFERENCES_WINDOW    = 1,
+    NEW_OS_WINDOW         = 2,
     NEW_OS_WINDOW_WITH_WD = 4,
-    NEW_TAB_WITH_WD = 8
+    NEW_TAB_WITH_WD       = 8
 } CocoaPendingAction;
-void set_cocoa_pending_action(CocoaPendingAction action, const char*);
+void set_cocoa_pending_action(CocoaPendingAction action, const char *);
 bool application_quit_requested(void);
 void request_application_quit(void);
+
 #endif
 void request_frame_render(OSWindow *w);
 void request_tick_callback(void);
-typedef void (* timer_callback_fun)(id_type, void*);
-typedef void (* tick_callback_fun)(void*);
-id_type add_main_loop_timer(monotonic_t interval, bool repeats, timer_callback_fun callback, void *callback_data, timer_callback_fun free_callback);
+
+typedef void (*timer_callback_fun)(id_type, void *);
+typedef void (*tick_callback_fun)(void *);
+id_type add_main_loop_timer(monotonic_t interval,
+                            bool repeats,
+                            timer_callback_fun callback,
+                            void *callback_data,
+                            timer_callback_fun free_callback);
 void remove_main_loop_timer(id_type timer_id);
 void update_main_loop_timer(id_type timer_id, monotonic_t interval, bool enabled);
-void run_main_loop(tick_callback_fun, void*);
+void run_main_loop(tick_callback_fun, void *);
 void stop_main_loop(void);

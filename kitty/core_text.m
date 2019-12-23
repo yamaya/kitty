@@ -579,7 +579,8 @@ cell_metrics(PyObject *s,
              unsigned int *cell_height,
              unsigned int *baseline,
              unsigned int *underline_position,
-             unsigned int *underline_thickness) {
+             unsigned int *underline_thickness
+) {
     // 参照: https://developer.apple.com/library/content/documentation/StringsTextFonts/Conceptual/TextAndWebiPhoneOS/TypoFeatures/TextSystemFeatures.html
     CTFace *self = (CTFace *)s;
 
@@ -638,7 +639,7 @@ cell_metrics(PyObject *s,
     CFRelease(framesetter);
     *cell_height = MAX(4u, (unsigned int)ceilf(line_height));
 #undef count
-} /* cell_metrics */
+}
 
 /**
  * フォントデスクリプタからCTFaceを生成する

@@ -241,16 +241,29 @@ def render_box_drawing(codepoint, cell_width, cell_height, dpi):
 
 
 class setup_for_testing:
+    """テストの準備
+
+    Attributes:
+        family: フォントファミリ
+        size: フォントポイントサイズ
+        dpi: DPI
+    """
 
     def __init__(self, family='monospace', size=11.0, dpi=96.0):
         self.family, self.size, self.dpi = family, size, dpi
 
     def __enter__(self):
+        """処理本体
+
+        Returns: タプル(スプライト配列, セル幅, セル高)
+        """
+
         from collections import OrderedDict
         opts = defaults._replace(font_family=self.family, font_size=self.size)
         set_options(opts)
         sprites = OrderedDict()
 
+        # レンダリング結果を`sprites`辞書にため込む
         def send_to_gpu(x, y, z, data):
             sprites[(x, y, z)] = data
 
@@ -267,13 +280,27 @@ class setup_for_testing:
     def __exit__(self, *args):
         set_send_sprite_to_gpu(None)
 
-
 def render_string(text, family='monospace', size=11.0, dpi=96.0):
+    """文字列をレンダリングする
+
+    Args:
+        text (str): 文字列
+        family (str): フォントファミリ
+        size (float): フォントポイントサイズ
+        dpi: (float): DPI
+
+    Returns:
+        tuple: セル幅, セル高, セルのリスト
+    """
+
+    # テストって書いてあるけど as でバインドしている変数は戻り値で返すから本ちゃんコードだよなこれ
     with setup_for_testing(family, size, dpi) as (sprites, cell_width, cell_height):
-        s = Screen(None, 1, len(text)*2)
+        s = Screen(None, 1, len(text) * 2)
         line = s.line(0)
         s.draw(text)
         test_render_line(line)
+
+    # スクリーンの端から逆順に辿ってスプライトを取得しcellsに詰めていく
     cells = []
     found_content = False
     for i in reversed(range(s.columns)):

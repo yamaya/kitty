@@ -368,7 +368,7 @@ font_group_for(double font_sz_in_pts, double logical_dpi_x, double logical_dpi_y
     // フォントグループの初期化
     initialize_font_group(fg);
     return fg;
-} /* font_group_for */
+}
 
 /**
  * フォントグループが内包するキャンバスをクリア(0埋め)する
@@ -2536,9 +2536,10 @@ send_prerendered_sprites_for_window(OSWindow *w) {
 /**
  * フォントデータをロードする
  *
- * @param font_sz_in_pts ポイントサイズ
- * @param dpi_x DPIのx
- * @param dpi_x DPIのy
+ * \param font_sz_in_pts ポイントサイズ
+ * \param dpi_x DPIのx
+ * \param dpi_x DPIのy
+ * \return FONTS_DATA_HANDLE
  */
 FONTS_DATA_HANDLE
 load_fonts_data(double font_sz_in_pts, double dpi_x, double dpi_y) {
@@ -2622,7 +2623,7 @@ test_sprite_position_for(PyObject UNUSED *self, PyObject *args) {
 }
 
 /**
- * スプライトをGPUに転送する関数を設定する(Pythonモジュール)
+ * スプライトをGPUに転送する関数を設定する - Pythonモジュール
  *
  * @param self 未使用
  * @param fun 関数
