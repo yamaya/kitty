@@ -1026,11 +1026,11 @@ do_render(CTFontRef ct_font,
     else {
         ensure_render_space(canvas_width, cell_height);
         render_glyphs(ct_font, canvas_width, cell_height, baseline, num_glyphs);
-        const Region src = {
+        Region src = {
             .bottom = cell_height,
             .right = canvas_width
         };
-        const Region dest = src;
+        Region dest = src;
         render_alpha_mask(render_buf, canvas, &src, &dest, canvas_width, canvas_width);
     }
 

@@ -22,8 +22,23 @@
 #define UNUSED                        __attribute__ ((unused))
 #define PYNOARG                       PyObject *__a1 UNUSED, PyObject *__a2 UNUSED
 #define EXPORTED                      __attribute__ ((visibility("default")))
+
+/**
+ * 多くの場合に真となる場合に使用するマクロ
+ *  分岐予測のヒントをコンパイラに与える。Linux Kernelで用いられる手法。
+ *  see: https://qiita.com/kaityo256/items/8a0c5376fad17907e1f6
+ *
+ * @param x 式
+ */
 #define LIKELY(x)                   __builtin_expect(!!(x), 1)
+
+/**
+ * 多くの場合に偽となる場合に使用するマクロ
+ *
+ * @param x 式
+ */
 #define UNLIKELY(x)                 __builtin_expect(!!(x), 0)
+
 #define MAX(x, y)                   __extension__({ \
         __typeof__ (x) a = (x); __typeof__ (y) b = (y); \
         a > b ? a : b;})
@@ -309,11 +324,13 @@ typedef struct {FONTS_DATA_HEAD} *FONTS_DATA_HANDLE;
         (base)->capacity = _newcap; \
     }
 
-#define remove_i_from_array(array, i, count) { \
+#define remove_i_from_array(array, i, count) \
+    do { \
         (count)--; \
         if ((i) < (count)) { \
             memmove((array) + (i), (array) + (i) + 1, sizeof((array)[0]) *((count) - (i))); \
-        }}
+        } \
+    } while (false)
 
 // Global functions
 const char * base64_decode(const uint32_t *src, size_t src_sz, uint8_t *dest, size_t dest_capacity, size_t *dest_sz);

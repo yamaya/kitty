@@ -35,7 +35,9 @@ typedef uint32_t text_t;
 #define IS_LOWERCASE(x) (x) >= 'a' && (x) <= 'z'
 #define IS_UPPERCASE(x) (x) >= 'A' && (x) <= 'Z'
 #define LOWERCASE(x) ((IS_UPPERCASE(x)) ? (x) + 32 : (x))
+#ifndef arraysz
 #define arraysz(x) (sizeof(x)/sizeof(x[0]))
+#endif
 
 typedef struct {
     text_t* src;
