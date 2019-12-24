@@ -1628,14 +1628,29 @@ typedef struct {
 } Group;
 
 /**
- * TODO: グループって何？
  * グループ状態構造体
- *  fonts.cのshape関数が呼ばれる都度、初期化される
+ *  fonts.cの shape 関数が呼ばれる都度、初期化される
  */
 typedef struct {
+    /**
+     * 直前のクラスタ
+     *  TODO これ多分いらない
+     */
     uint32_t previous_cluster;
-    bool prev_was_special,
-         prev_was_empty;
+
+    /**
+     * 直前は特殊グリフだったか
+     */
+    bool prev_was_special;
+
+    /**
+     * 直前は空グリフだったか
+     */
+    bool prev_was_empty;
+
+    /**
+     * カレントのセルデータ
+     */
     CellData current_cell_data;
 
     /**
