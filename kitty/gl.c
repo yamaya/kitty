@@ -228,9 +228,12 @@ bind_buffer(ssize_t buf_idx) {
 
 static void
 unbind_buffer(ssize_t buf_idx) {
-    glBindBuffer(buffers[buf_idx].usage, 0);
+    glBindBuffer(buffers[buf_idx].usage, 0); // 0に戻す
 }
 
+/**
+ * 頂点オブジェクトのバッファを確保する
+ */
 static inline void
 alloc_buffer(ssize_t idx, GLsizeiptr size, GLenum usage) {
     Buffer *buffer = &buffers[idx];
@@ -243,10 +246,11 @@ alloc_buffer(ssize_t idx, GLsizeiptr size, GLenum usage) {
 }
 
 /**
- * バッファをマップする
+ * GLバッファオブジェクトを主記憶にマップする
  *
  * \param[in] idx 対象バッファのインデックス
  * \param[in] access アクセスタイプ
+ * \return 主記憶のアドレス - unmap_bufferするまで有効
  */
 static inline void *
 map_buffer(ssize_t idx, GLenum access) {
@@ -325,6 +329,7 @@ add_located_attribute_to_vao(ssize_t vao_idx,
     ssize_t buf = vao->buffers[vao->num_buffers - 1];
     bind_buffer(buf);
     glEnableVertexAttribArray(aloc);
+
     switch (data_type) {
     case GL_BYTE:
     case GL_UNSIGNED_BYTE:
@@ -397,7 +402,6 @@ alloc_vao_buffer(ssize_t vao_idx, GLsizeiptr size, size_t bufnum, GLenum usage) 
     const ssize_t i = vaos[vao_idx].buffers[bufnum];
 
     bind_buffer(i);
-
     alloc_buffer(i, size, usage);
     return i;
 }
@@ -405,7 +409,6 @@ alloc_vao_buffer(ssize_t vao_idx, GLsizeiptr size, size_t bufnum, GLenum usage) 
 void *
 map_vao_buffer(ssize_t vao_idx, size_t bufnum, GLenum access) {
     const ssize_t i = vaos[vao_idx].buffers[bufnum];
-
     bind_buffer(i);
     return map_buffer(i, access);
 }
@@ -422,7 +425,6 @@ map_vao_buffer(ssize_t vao_idx, size_t bufnum, GLenum access) {
 void *
 alloc_and_map_vao_buffer(ssize_t vao_idx, GLsizeiptr size, size_t bufnum, GLenum usage, GLenum access) {
     const ssize_t i = alloc_vao_buffer(vao_idx, size, bufnum, usage);
-
     return map_buffer(i, access);
 }
 

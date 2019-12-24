@@ -2307,13 +2307,13 @@ screen_request_capabilities(Screen *self, char c, PyObject *q) {
  *
  * @param line 行
  * @param dest_y 出力先y座標
- * @param data 出力先バッファ
+ * @param address 出力先バッファ (glMapBufferの戻り値)
  */
 static inline void
-update_line_data(Line *line, unsigned int dest_y, uint8_t *data) {
+update_line_data(Line *line, unsigned int dest_y, uint8_t *address) {
     const size_t stride = line->xnum * sizeof(GPUCell);
     size_t base = dest_y * stride;
-    memcpy(data + base, line->gpu_cells, stride);
+    memcpy(address + base, line->gpu_cells, stride);
 }
 
 /**
@@ -2332,7 +2332,7 @@ screen_reset_dirty(Screen *self) {
  *  shaders.cのcell_prepare_to_renderから呼ばれる
  *
  * @param self スクリーン
- * @param address ？
+ * @param address glMapBufferの戻り値
  * @param fonts_data FONTS_DATA_HANDLE
  * @param cursor_has_moved ？
  */

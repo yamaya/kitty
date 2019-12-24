@@ -500,14 +500,14 @@ extra_glyphs_equal(ExtraGlyphs *a, ExtraGlyphs *b) {
 /**
  * グリフに対するスプライト位置を探す
  *
- * @param fg フォントグループ
- * @param font フォント
- * @param glyph_index グリフのインデックス
- * @param glyph グリフ
- * @param extra_glyphs エクストラグリフ
- * @param ligature_index リガチャのインデックス
- * @param error エラー値[out]
- * @return スプライト位置
+ * \param[in] fg フォントグループ
+ * \param[in] font フォント
+ * \param[in] glyph_index グリフのインデックス
+ * \param[in] glyph グリフ
+ * \param[in] extra_glyphs エクストラグリフ
+ * \param[in] ligature_index リガチャのインデックス
+ * \param[in] error エラー値[out]
+ * \return スプライト位置
  */
 static SpritePosition *
 sprite_position_for(
@@ -971,6 +971,7 @@ calc_cell_metrics(FontGroup *fg) {
     fg->underline_thickness = underline_thickness;
 
     // キャンバスの再割当
+    // NOTE: 1行27文字のサイズしか確保してないぞ🤔
     free(fg->canvas);
     fg->canvas = calloc(CELLS_IN_CANVAS * fg->cell_width * fg->cell_height, sizeof(pixel));
     if (!fg->canvas) {
@@ -1411,7 +1412,7 @@ render_box_cell(FontGroup *fg, CPUCell *cpu_cell, GPUCell *gpu_cell) {
 }
 
 /**
- * HarfBuzzをロードする
+ * HarfBuzzバッファをロードする
  *
  * \param cpu_cell CPUセルの配列
  * \param first_gpu_cell GPUセルの配列
@@ -1542,7 +1543,7 @@ render_group(
         }
     }
 
-    // レンダリング済ならスプライト位置だけ更新する
+    // スプライト位置を更新する
     if (sprite_position[0]->rendered) {
         for (unsigned int i = 0; i < num_cells; i++) {
             set_cell_sprite(&gpu_cells[i], sprite_position[i]);
@@ -1599,6 +1600,8 @@ render_group(
     }
 }
 
+#pragma mark -
+
 /**
  * セルデータ構造体
  */
@@ -1611,6 +1614,8 @@ typedef struct {
 } CellData;
 
 /**
+ * TODO: グループって何？
+ * ひょっとしてRunだったりする？これ
  * グループ構造体
  */
 typedef struct {
@@ -1623,31 +1628,81 @@ typedef struct {
 } Group;
 
 /**
+ * TODO: グループって何？
  * グループ状態構造体
+ *  fonts.cのshape関数が呼ばれる都度、初期化される
  */
 typedef struct {
     uint32_t previous_cluster;
     bool prev_was_special,
          prev_was_empty;
     CellData current_cell_data;
+
+    /**
+     * グループの配列
+     */
     Group *groups;
-    size_t groups_capacity,
-           group_idx,
-           glyph_idx,
-           cell_idx,
-           num_cells,
-           num_glyphs;
-    CPUCell *first_cpu_cell,
-            *last_cpu_cell;
-    GPUCell *first_gpu_cell,
-            *last_gpu_cell;
+
+    /**
+     * グループの配列のサイズ
+     */
+    size_t groups_capacity;
+
+    /**
+     * カレントのグループのインデックス
+     */
+    size_t group_idx;
+
+    /**
+     * グリフのインデックス
+     */
+    size_t glyph_idx;
+
+    /**
+     * セルのインデックス
+     */
+    size_t cell_idx;
+
+    /**
+     * render_run関数で指定された num_cells
+     *  ランに含まれるセルの数？
+     */
+    size_t num_cells;
+
+    /**
+     * infoの件数
+     */
+    size_t num_glyphs;
+
+    /**
+     * 先頭のCPUセル
+     */
+    CPUCell *first_cpu_cell;
+
+    /**
+     * 末尾のCPUセル
+     */
+    CPUCell *last_cpu_cell;
+
+    /**
+     * 先頭のGPUセル
+     */
+    GPUCell *first_gpu_cell;
+
+    /**
+     * 末尾のGPUセル
+     */
+    GPUCell *last_gpu_cell;
+
     /**
      * HarfBuzzグリフ情報
+     *  hb_buffer_get_glyph_infos の戻り値
      */
     hb_glyph_info_t *info;
 
     /**
      * HarfBuzz位置情報
+     *  hb_buffer_get_glyph_positionsの戻り値
      */
     hb_glyph_position_t *positions;
 } GroupState;
@@ -1867,10 +1922,12 @@ shape_run(
     bool disable_ligature
 ) {
     // レイアウトする
+    // これで group_state のメンバが埋められる
     shape(first_cpu_cell, first_gpu_cell, num_cells, harfbuzz_font_for_face(font->face), font, disable_ligature);
 
     /*
-     * グリフをセルのグループに分配します。
+     * グリフをセルのグループに分配する
+     *
      * 留意すべき考慮事項：
      *
      * 最高のパフォーマンスを得るには、グループのサイズをできるだけ小さくする必
@@ -1892,25 +1949,35 @@ shape_run(
      * 次に、グリフが合字グリフ（is_special_glyph）であり、空のグリフであるかどうかを確認します。
      * この3つデータポイントは、さまざまなフォントについて、上記の制約を満たすのに十分な情報を提供します。
      */
-    uint32_t cluster, next_cluster;
-    bool add_to_current_group;
-
 #define G(x) (group_state.x)
 #define MAX_GLYPHS_IN_GROUP (MAX_NUM_EXTRA_GLYPHS + 1u)
 
     while (G(glyph_idx) < G(num_glyphs) && G(cell_idx) < G(num_cells)) {
+
+        // HarfBuzzバッファからグリフIDとクラスタを得る
         glyph_index glyph_id = G(info)[G(glyph_idx)].codepoint;
-        cluster = G(info)[G(glyph_idx)].cluster;
-        bool is_special = is_special_glyph(glyph_id, font, &G(current_cell_data));
-        bool is_empty = is_special && is_empty_glyph(glyph_id, font);
+        const uint32_t cluster = G(info)[G(glyph_idx)].cluster;
+
+        // 特殊グリフか
+        const bool is_special = is_special_glyph(glyph_id, font, &G(current_cell_data));
+
+        // 空グリフか
+        const bool is_empty = is_special && is_empty_glyph(glyph_id, font);
+
+        // グリフに割当たっているコードポイントの件数
         uint32_t num_codepoints_used_by_glyph = 0;
+
+        // 最後のグリフかどうか
         const bool is_last_glyph = G(glyph_idx) == G(num_glyphs) - 1;
+
+        // カレントグループを得る
         Group *current_group = G(groups) + G(group_idx);
+
         if (is_last_glyph) {
             num_codepoints_used_by_glyph = UINT32_MAX;
         }
         else {
-            next_cluster = G(info)[G(glyph_idx) + 1].cluster;
+            const uint32_t next_cluster = G(info)[G(glyph_idx) + 1].cluster;
             // アラビア語のようなRTL言語はクラスタ番号が減少していく
             if (next_cluster != cluster) {
                 num_codepoints_used_by_glyph =
@@ -1919,7 +1986,8 @@ shape_run(
         }
 
         // 現在のグループに追加できるかどうか判定する
-        if (!current_group->num_glyphs) {
+        bool add_to_current_group;
+        if (current_group->num_glyphs == 0) {
             add_to_current_group = true;
         }
         else {
@@ -1935,11 +2003,13 @@ shape_run(
             add_to_current_group = false;
         }
 
+        // グループに追加できない場合は次のグループに移動する
         if (!add_to_current_group) {
             G(group_idx)++;
             current_group = G(groups) + G(group_idx);
         }
-        if (!current_group->num_glyphs++) {
+
+        if (0 == current_group->num_glyphs++) {
             current_group->first_glyph_idx = G(glyph_idx);
             current_group->first_cell_idx = G(cell_idx);
         }
@@ -1957,17 +2027,23 @@ shape_run(
             current_group->has_special_glyph = true;
         }
         if (is_last_glyph) {
+
             // 残りのすべてのセルを吸収する
             if (G(cell_idx) < G(num_cells)) {
-                unsigned int num_left = G(num_cells) - G(cell_idx);
-                if (current_group->num_cells + num_left > MAX_GLYPHS_IN_GROUP) {
-                    MOVE_GLYPH_TO_NEXT_GROUP(G(cell_idx)); // グリフを次のグループに移動する
+
+                // 空きスロット数
+                const unsigned int slots = G(num_cells) - G(cell_idx);
+
+                // グリフを次のグループに移動する
+                if (current_group->num_cells + slots > MAX_GLYPHS_IN_GROUP) {
+                    MOVE_GLYPH_TO_NEXT_GROUP(G(cell_idx));
                 }
-                current_group->num_cells += num_left;
+                current_group->num_cells += slots;
+
                 if (current_group->num_cells > MAX_GLYPHS_IN_GROUP) {
-                    current_group->num_cells = MAX_GLYPHS_IN_GROUP; // 後続のセルを空のままにします
+                    current_group->num_cells = MAX_GLYPHS_IN_GROUP;
                 }
-                G(cell_idx) += num_left;
+                G(cell_idx) += slots;
             }
         }
         else {
@@ -2380,6 +2456,7 @@ render_line(FONTS_DATA_HANDLE fg_, Line *line, index_type lnum, Cursor *cursor, 
  * @param fg_ フォントグループ
  * @param text テキスト
  * @return StringCanvas
+ * \note child-monitor.cの draw_resizing_text からしか呼ばれない...
  */
 StringCanvas
 render_simple_text(FONTS_DATA_HANDLE fg_, const char *text) {

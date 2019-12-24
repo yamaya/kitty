@@ -435,6 +435,9 @@ typedef struct {FONTS_DATA_HEAD} *FONTS_DATA_HANDLE;
 #define PARSER_BUF_SZ   (8 * 1024)
 #define READ_BUF_SZ     (1024 *1024)
 
+/**
+ * GPUセルのスプライト座標をクリアする
+ */
 #define clear_sprite_position(cell) \
     (cell).sprite_x = 0; \
     (cell).sprite_y = 0; \

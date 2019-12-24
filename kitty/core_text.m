@@ -730,7 +730,7 @@ static CGGlyph glyphs[128];
 static CGRect boxes[128];
 
 /**
- * 位置の配列
+ * グリフの出力位置の配列
  *  なんでstatic...
  */
 static CGPoint positions[128];
@@ -886,6 +886,7 @@ render_glyphs(CTFontRef font, unsigned int width, unsigned int height, unsigned 
  * @param text 文字列
  * @param baseline ベースライン
  * @return StringCanvasオブジェクト
+ * \note font.sの render_simple_text_impl から呼ばれる
  */
 StringCanvas
 render_simple_text_impl(PyObject *s, const char *text, unsigned int baseline) {
@@ -945,10 +946,10 @@ render_simple_text_impl(PyObject *s, const char *text, unsigned int baseline) {
  * @param ct_font CTFontオブジェクト
  * @param bold ボールド
  * @param italic イタリック
- * @param info HarfBuzzグリフ情報
+ * @param info HarfBuzzグリフ情報 ... これって色付けグリフじゃないと使用しないっぽい
  * @param hb_positions HarfBuzz位置情報
  * @param num_glyphs グリフの数
- * @param canvas キャンバス(?)
+ * @param canvas レンダリングの出力先ピクセルバッファ
  * @param cell_width セルの幅
  * @param cell_height セルの高さ
  * @param num_cells セルの個数
@@ -1068,6 +1069,7 @@ do_render(CTFontRef ct_font,
  * @param fg フォントデータハンドル
  * @param center_glyph レンダリング位置を中央にする
  * @return レンダリング出来たら真 ... だけどこの実装は真固定で返してる
+ * \note fonts.cのrender_groupから呼ばれる
  */
 bool
 render_glyphs_in_cells(PyObject *s,

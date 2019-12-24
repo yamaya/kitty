@@ -5281,4 +5281,3 @@ combining_type mark_for_codepoint(char_type c) {
 
 
 END_ALLOW_CASE_RANGE
- * > 実装は、文字をサポートしていない場合は常に、レンダリングでデフォルトの無視
