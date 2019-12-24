@@ -9,18 +9,18 @@
 
 // Inputs {{{
 layout(std140) uniform CellRenderData {
-	/*
-	 * xstart, ystart: スクリーンの左上
-	 * dx, dy: セルのサイズ(デバイス座標系)
-	 * sprite_dx, sprite_dy: なぞ
-	 */
+	//
+	// xstart, ystart: スクリーンの左上
+	// dx, dy: セルのサイズ(デバイス座標系)
+	// sprite_dx, sprite_dy: なぞ
+	//
     float xstart, ystart, dx, dy, sprite_dx, sprite_dy, background_opacity, cursor_text_uses_bg;
 
     uint default_fg, default_bg, highlight_fg, highlight_bg, cursor_color, cursor_text_color, url_color, url_style, inverted;
 
-	/*
-	 * xnum, ynum: スクリーンのセル数
-	 */
+	//
+	// xnum, ynum: スクリーンのセル数
+	//
     uint xnum, ynum, cursor_fg_sprite_idx;
     float cursor_x, cursor_y, cursor_w;
 
@@ -137,19 +137,19 @@ float is_cursor(uint xi, uint y) {
 }
 // }}}
 
-/**
- * メイン関数
- *
- * - gl_VertexID
- * 	 頂点シェーダが実行されているときの対象頂点のインデックスが格納されている変数
- * - gl_InstanceID
- *   インスタンシングによって描かれているときのインスタンスのインデックス
- */
+//
+// メイン関数
+//
+// - gl_VertexID
+// 	 頂点シェーダが実行されているときの対象頂点のインデックスが格納されている変数
+// - gl_InstanceID
+//   インスタンシングによって描かれているときのインスタンスのインデックス
+//
 void main() {
 
-	/*
-	 * セルの頂点位置はインスタンススIDから求める
-	 */
+	//
+	// セルの頂点位置はインスタンススIDから求める
+	//
     uint instance_id = uint(gl_InstanceID);
     uint row = instance_id / xnum; // スクリーンの幅(セル数)で割る
     uint col = instance_id - (row * xnum); // スクリーンの幅の余りでも良い
@@ -158,13 +158,13 @@ void main() {
     float left = xstart + col * dx;
     float top = ystart - row * dy;
     vec2 xpos = vec2(left, left + dx); // left, rightのペア
-    vec2 ypos = vec2(top, top - dy); / top, bottomのペア
+    vec2 ypos = vec2(top, top - dy); // top, bottomのペア
     uvec2 pos = cell_pos_map[gl_VertexID];
     gl_Position = vec4(xpos[pos.x], ypos[pos.y], 0, 1);
 
-	/*
-	 * 色インデックスを設定する
-	 */
+	//
+	// 色インデックスを設定する
+	//
     uvec2 default_colors = uvec2(default_fg, default_bg);
     uint text_attrs = sprite_coords[3];
     uint is_reversed = ((text_attrs >> REVERSE_SHIFT) & ONE);
@@ -176,9 +176,9 @@ void main() {
     float cell_has_block_cursor = cell_has_cursor * is_block_cursor;
     vec3 bg = to_color(colors[bg_index], default_colors[bg_index]);
 
-    /*
-	 * 前景
-	 */
+    //
+	// 前景
+	//
 #ifdef NEEDS_FOREGROUND
 	// レンダリングされる文字スプライト
     sprite_pos = to_sprite_pos(pos, sprite_coords.x, sprite_coords.y, sprite_coords.z & Z_MASK);
@@ -211,9 +211,9 @@ void main() {
     cursor_pos = to_sprite_pos(pos, cursor_fg_sprite_idx * uint(cell_has_cursor), ZERO, ZERO);
 #endif
 
-    /*
-	 * 背景
-	 */
+    //
+	// 背景
+	//
 #ifdef NEEDS_BACKROUND
 
 #if defined(BACKGROUND)
