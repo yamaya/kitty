@@ -750,8 +750,6 @@ finalize(void) {
 /**
  * カラーグリフをレンダリングする
  *
- *  TODO これ用途なんだろう？コメント見る限り絵文字かな？
- *
  * @param font CTFontオブジェクト
  * @param buf レンダリング出力先バッファ
  * @param glyph_id グリフID
@@ -789,8 +787,8 @@ render_color_glyph(CTFontRef font, uint8_t *buf, int glyph_id, unsigned int widt
     CGContextSetTextPosition(ctx, -boxes[0].origin.x, MAX(2, height - 1.2f * baseline));
 
     // グリフを描画する
-    CGGlyph glyph = glyph_id;
-    CTFontDrawGlyphs(font, &glyph, &CGPointZero, 1, ctx);
+    const CGGlyph glyph[] = {glyph_id};
+    CTFontDrawGlyphs(font, glyph, &CGPointZero, 1, ctx);
 
     // リソースの解放
     CGContextRelease(ctx);
@@ -1025,7 +1023,12 @@ do_render(CTFontRef ct_font,
 
     // 色付けグリフかどうかでレンダリング処理を変更する
     if (*was_colored) {
-        render_color_glyph(ct_font, (uint8_t *)canvas, info[0].codepoint, cell_width * num_cells, cell_height, baseline);
+        render_color_glyph(ct_font,
+                           (uint8_t *)canvas,
+                           info[0].codepoint,
+                           cell_width * num_cells,
+                           cell_height,
+                           baseline);
     }
     else {
         ensure_render_space(canvas_width, cell_height);

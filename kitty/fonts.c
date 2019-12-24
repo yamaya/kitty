@@ -14,17 +14,17 @@
 /**
  * TODO 何？
  */
-#define MISSING_GLYPH            4
+#define MISSING_GLYPH        (4)
 
 /**
  * エクストラ・グリフの数
  */
-#define MAX_NUM_EXTRA_GLYPHS     8u
+#define MAX_EXTRA_GLYPHS     (8u)
 
 /**
  * キャンバス(ピクセルバッファ)に含まれるセルの数
  */
-#define CELLS_IN_CANVAS          ((MAX_NUM_EXTRA_GLYPHS + 1u) * 3u)
+#define MAX_CELLS_IN_CANVAS  ((MAX_EXTRA_GLYPHS + 1u) * 3u)
 
 /**
  * TODO 何？
@@ -65,7 +65,7 @@ enum {
  * エクストラ・グリフ
  */
 typedef struct {
-    glyph_index data[MAX_NUM_EXTRA_GLYPHS];
+    glyph_index data[MAX_EXTRA_GLYPHS];
 } ExtraGlyphs;
 
 typedef struct SpritePosition SpritePosition;
@@ -259,6 +259,26 @@ typedef struct {
     GPUSpriteTracker sprite_tracker;
 } FontGroup;
 
+static inline
+size_t fontgroup_get_canvas_pixel_count(const FontGroup *fg) {
+    return MAX_CELLS_IN_CANVAS * fg->cell_width * fg->cell_height;
+}
+
+static inline
+size_t fontgroup_get_canvas_byte_size(const FontGroup *fg) {
+    return fontgroup_get_canvas_pixel_count(fg) * sizeof(pixel);
+}
+
+static inline
+pixel* fontgroup_get_canvas_tail(FontGroup *fg) {
+    return &fg->canvas[fg->cell_width * fg->cell_height * (MAX_CELLS_IN_CANVAS - 1)];
+}
+
+static inline
+pixel* fontgroup_get_canvas_at(FontGroup *fg, unsigned at) {
+    return &fg->canvas[fg->cell_width * at];
+}
+
 /**
  * フォントグループの配列
  *  何故にstaticなのか
@@ -414,7 +434,7 @@ font_group_for(double font_sz_in_pts, double logical_dpi_x, double logical_dpi_y
 static inline void
 clear_canvas(FontGroup *fg) {
     if (fg->canvas) {
-        memset(fg->canvas, 0, CELLS_IN_CANVAS * fg->cell_width * fg->cell_height * sizeof(pixel));
+        memset(fg->canvas, 0, fontgroup_get_canvas_byte_size(fg));
     }
 }
 
@@ -486,7 +506,7 @@ do_increment(FontGroup *fg, int *error) {
  */
 static inline bool
 extra_glyphs_equal(ExtraGlyphs *a, ExtraGlyphs *b) {
-    for (size_t i = 0; i < MAX_NUM_EXTRA_GLYPHS; i++) {
+    for (size_t i = 0; i < MAX_EXTRA_GLYPHS; i++) {
         if (a->data[i] != b->data[i]) {
             return false;
         }
@@ -973,7 +993,7 @@ calc_cell_metrics(FontGroup *fg) {
     // キャンバスの再割当
     // NOTE: 1行27文字のサイズしか確保してないぞ🤔
     free(fg->canvas);
-    fg->canvas = calloc(CELLS_IN_CANVAS * fg->cell_width * fg->cell_height, sizeof(pixel));
+    fg->canvas = calloc(fontgroup_get_canvas_byte_size(fg), sizeof(pixel));
     if (!fg->canvas) {
         fatal("Out of memory allocating canvas for font group");
     }
@@ -1405,7 +1425,7 @@ render_box_cell(FontGroup *fg, CPUCell *cpu_cell, GPUCell *gpu_cell) {
     };
     render_alpha_mask(alpha_mask, fg->canvas, &region, &region, fg->cell_width, fg->cell_width);
 
-    // スプライトをGPUに転送する
+    // スプライト(fg->canvas)をGPUに転送する
     current_send_sprite_to_gpu((FONTS_DATA_HANDLE)fg, sp->x, sp->y, sp->z, fg->canvas);
 
     Py_DECREF(ret);
@@ -1489,9 +1509,9 @@ set_cell_sprite(GPUCell *cell, SpritePosition *sp) {
 static inline pixel *
 extract_cell_from_canvas(FontGroup *fg, unsigned int i, unsigned int num_cells) {
     // キャンバス配列の末尾に展開する
-    pixel *tail = &fg->canvas[fg->cell_width * fg->cell_height * (CELLS_IN_CANVAS - 1)];
+    pixel *tail = fontgroup_get_canvas_tail(fg);
     pixel *dest = tail;
-    const pixel *src = &fg->canvas[i * fg->cell_width];
+    const pixel *src = fontgroup_get_canvas_at(fg, i);
     const unsigned int stride = fg->cell_width * num_cells;
 
     for (unsigned int y = 0; y < fg->cell_height; y++, dest += fg->cell_width, src += stride) {
@@ -1501,7 +1521,7 @@ extract_cell_from_canvas(FontGroup *fg, unsigned int i, unsigned int num_cells) 
 }
 
 /**
- * フォントグループでレンダリングする
+ * グループをレンダリングする
  *
  * @param fg フォントグループ
  * @param num_cells セルの個数
@@ -1529,9 +1549,9 @@ render_group(
         ExtraGlyphs *extra_glyphs,
         bool center_glyph
 ) {
-    static SpritePosition *sprite_position[16]; // なんでstatic...
+    static SpritePosition *sprite_position[16]; // なんでstatic... なんで16
 
-    // スプライト位置を求めて static 変数 sprite_positionを埋める
+    // スプライト位置を求めて sprite_positionに格納する
     num_cells = MIN(arraysz(sprite_position), num_cells);
     for (unsigned int i = 0; i < num_cells; i++) {
         int error = 0;
@@ -1543,7 +1563,7 @@ render_group(
         }
     }
 
-    // スプライト位置を更新する
+    // セル内のスプライト位置を更新する
     if (sprite_position[0]->rendered) {
         for (unsigned int i = 0; i < num_cells; i++) {
             set_cell_sprite(&gpu_cells[i], sprite_position[i]);
@@ -1584,19 +1604,19 @@ render_group(
     for (unsigned int i = 0; i < num_cells; i++) {
         sprite_position[i]->rendered = true;
         sprite_position[i]->colored = was_colored;
-        set_cell_sprite(gpu_cells + i, sprite_position[i]);
+        set_cell_sprite(&gpu_cells[i], sprite_position[i]);
 
-        // セルがn個の場合はcanvasを展開する(なんで？)
-        pixel *buf = num_cells == 1 ?
+        // セルがn個の場合はcanvasを展開する (なんで？)
+        pixel *p = num_cells == 1 ?
             fg->canvas :
             extract_cell_from_canvas(fg, i, num_cells);
 
-        // スプライトをGPUに転送する
+        // スプライト(p)をGPUに転送する
         current_send_sprite_to_gpu((FONTS_DATA_HANDLE)fg,
                                    sprite_position[i]->x,
                                    sprite_position[i]->y,
                                    sprite_position[i]->z,
-                                   buf);
+                                   p);
     }
 }
 
@@ -1614,9 +1634,8 @@ typedef struct {
 } CellData;
 
 /**
- * TODO: グループって何？
- * ひょっとしてRunだったりする？これ
  * グループ構造体
+ *  ほぼほぼラン
  */
 typedef struct {
     /** 先頭グリフのインデックス */
@@ -1641,14 +1660,16 @@ typedef struct {
 /**
  * グループにおける最大グリフ数
  */
-#define MAX_GLYPHS_IN_GROUP (MAX_NUM_EXTRA_GLYPHS + 1u)
+#define MAX_GLYPHS_IN_GROUP (MAX_EXTRA_GLYPHS + 1u)
 
 /**
  * グループ状態構造体
- *  fonts.cの shape 関数が呼ばれる都度初期化される
+ *  レイアウト処理のコンテキスト
+ *  fonts.cの shape 関数が呼ばれる都度、初期化される
+ *  レイアウトの中間結果を保持する器
+ *  レイアウト処理が終わったあとも参照される
  */
 typedef struct {
-
     /**
      * 直前は特殊グリフだったか
      */
@@ -2143,7 +2164,7 @@ merge_groups_for_pua_space_ligature(void) {
         // g1の内容をg0に加える
         g0->num_cells += g1->num_cells;
         g0->num_glyphs += g1->num_glyphs;
-        g0->num_glyphs = MIN(g0->num_glyphs, MAX_NUM_EXTRA_GLYPHS + 1);
+        g0->num_glyphs = MIN(g0->num_glyphs, MAX_EXTRA_GLYPHS + 1);
         gs->group_idx--;
     }
     gs->groups->is_space_ligature = true;
@@ -2293,8 +2314,8 @@ test_shape(PyObject UNUSED *self, PyObject *args) {
         }
         first_glyph = group->num_glyphs ? G(info)[group->first_glyph_idx].codepoint : 0;
 
-        PyObject *eg = PyTuple_New(MAX_NUM_EXTRA_GLYPHS);
-        for (size_t g = 0; g < MAX_NUM_EXTRA_GLYPHS; g++) {
+        PyObject *eg = PyTuple_New(MAX_EXTRA_GLYPHS);
+        for (size_t g = 0; g < MAX_EXTRA_GLYPHS; g++) {
             PyTuple_SET_ITEM(eg, g,
                              Py_BuildValue("H", g + 1 < group->num_glyphs ? G(info)[group->first_glyph_idx + g].codepoint : 0));
         }
@@ -2399,6 +2420,37 @@ render_run(
     }
 }
 
+static inline
+void
+render_run_impl(
+    FontGroup *fg,
+    ssize_t run_font_idx,
+    index_type i,
+    index_type first_cell_in_run,
+    const Cursor *cursor,
+    bool disable_ligature_at_cursor,
+    const Line *line,
+    bool is_centering,
+    DisableLigature strategy
+) {
+    if (run_font_idx != NO_FONT && i > first_cell_in_run) {
+        int cursor_offset = -1;
+        if (disable_ligature_at_cursor &&
+            first_cell_in_run <= cursor->x && cursor->x <= i) {
+            cursor_offset = cursor->x - first_cell_in_run;
+        }
+        render_run(fg,
+                line->cpu_cells + first_cell_in_run,
+                line->gpu_cells + first_cell_in_run,
+                i - first_cell_in_run,
+                run_font_idx,
+                false,
+                is_centering,
+                cursor_offset,
+                strategy);
+    }
+}
+
 /**
  * 行のレンダリング
  *
@@ -2410,21 +2462,6 @@ render_run(
  */
 void
 render_line(FONTS_DATA_HANDLE fg_, Line *line, index_type lnum, Cursor *cursor, DisableLigature disable_ligature_strategy) {
-#define RENDER \
-    if (run_font_idx != NO_FONT && i > first_cell_in_run) { \
-        int cursor_offset = -1; \
-        if (disable_ligature_at_cursor && first_cell_in_run <= cursor->x && \
-            cursor->x <= i) cursor_offset = cursor->x - first_cell_in_run; \
-        render_run(fg, \
-                   line->cpu_cells + first_cell_in_run, \
-                   line->gpu_cells + first_cell_in_run, \
-                   i - first_cell_in_run, \
-                   run_font_idx, \
-                   false, \
-                   center_glyph, \
-                   cursor_offset, \
-                   disable_ligature_strategy); \
-}
     FontGroup *fg = (FontGroup *)fg_;
     ssize_t run_font_idx = NO_FONT;
     bool center_glyph = false;
@@ -2463,7 +2500,8 @@ render_line(FONTS_DATA_HANDLE fg_, Line *line, index_type lnum, Cursor *cursor, 
                    i + num_spaces + 1 < line->xnum) {
                 num_spaces++;
 
-                // 私的利用文字の後に空白が続く場合、マルチセルのリガチャとしてレンダリングする
+                // 私的利用文字の後に空白が続く場合、マルチセルのリガチャとして
+                // レンダリングする
                 GPUCell *space_cell = line->gpu_cells + i + num_spaces;
 
                 // 空白セルがPUAセルの前景色を使用していることを保証する。
@@ -2476,7 +2514,15 @@ render_line(FONTS_DATA_HANDLE fg_, Line *line, index_type lnum, Cursor *cursor, 
             // ランのレンダリング
             if (num_spaces != 0) {
                 center_glyph = true;
-                RENDER
+                render_run_impl(fg,
+                                run_font_idx,
+                                i,
+                                first_cell_in_run,
+                                cursor,
+                                disable_ligature_at_cursor,
+                                line,
+                                center_glyph,
+                                disable_ligature_strategy);
                 center_glyph = false;
                 render_run(fg,
                            line->cpu_cells + i,
@@ -2501,12 +2547,27 @@ render_line(FONTS_DATA_HANDLE fg_, Line *line, index_type lnum, Cursor *cursor, 
         if (run_font_idx == cell_font_idx) {
             continue;
         }
-        RENDER
+        render_run_impl(fg,
+                        run_font_idx,
+                        i,
+                        first_cell_in_run,
+                        cursor,
+                        disable_ligature_at_cursor,
+                        line,
+                        center_glyph,
+                        disable_ligature_strategy);
         run_font_idx = cell_font_idx;
         first_cell_in_run = i;
     }
-    RENDER
-#undef RENDER
+    render_run_impl(fg,
+                    run_font_idx,
+                    i,
+                    first_cell_in_run,
+                    cursor,
+                    disable_ligature_at_cursor,
+                    line,
+                    center_glyph,
+                    disable_ligature_strategy);
 }
 
 /**
@@ -2623,7 +2684,7 @@ send_prerendered_sprites(FontGroup *fg) {
     // ブランクセル
     clear_canvas(fg);
 
-    // スプライトをGPUに転送
+    // スプライト(fg->canvas)をGPUに転送する
     current_send_sprite_to_gpu((FONTS_DATA_HANDLE)fg, x, y, z, fg->canvas);
 
     // スプライト・トラッカーを更新する
@@ -3161,6 +3222,8 @@ init_fonts(PyObject *module) {
     if (PyModule_AddFunctions(module, module_methods) != 0) {
         return false;
     }
+
+    // スプライト転送関数のデフォルトを設定する
     current_send_sprite_to_gpu = send_sprite_to_gpu;
     return true;
 }

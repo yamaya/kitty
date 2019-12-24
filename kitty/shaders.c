@@ -199,13 +199,13 @@ ensure_sprite_map(FONTS_DATA_HANDLE fg) {
 }
 
 /**
- * スプライトをGPUに転送する
+ * スプライト(1 セル分のビットマップ)をGPUに転送する
  *
  * \param[in] fg フォントグループ
- * \param[in] x x座標
- * \param[in] y y座標
- * \param[in] z z座標
- * \param[in] pixel ピクセルバッファ (CoreTextでグリフを描画したビットマップコンテキスト)
+ * \param[in] x 転送先のx座標
+ * \param[in] y 転送先のy座標
+ * \param[in] z 転送先のz座標
+ * \param[in] buf ピクセルバッファ (CoreTextでグリフを描画したビットマップコンテキスト)
  */
 void
 send_sprite_to_gpu(FONTS_DATA_HANDLE fg, unsigned int x, unsigned int y, unsigned int z, pixel *buf) {
