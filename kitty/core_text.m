@@ -13,6 +13,7 @@
 #include <math.h>
 #include <hb-coretext.h>
 #include <hb-ot.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import <CoreGraphics/CGBitmapContext.h>
 #import <CoreText/CTFont.h>
 #include <Foundation/Foundation.h>
@@ -802,7 +803,7 @@ render_color_glyph(CTFontRef font, uint8_t *buf, int glyph_id, unsigned int widt
             *((pixel *)buf) = px;
         }
     }
-} /* render_color_glyph */
+}
 
 /**
  * レンダリングバッファを確保する
@@ -973,7 +974,8 @@ do_render(CTFontRef ct_font,
           bool *was_colored,
           bool allow_resize,
           FONTS_DATA_HANDLE fg,
-          bool center_glyph) {
+          bool center_glyph
+) {
     // キャンバスの幅を求める
     const unsigned int canvas_width = cell_width * num_cells;
 
@@ -1057,7 +1059,7 @@ do_render(CTFontRef ct_font,
  * @param info HarfBuzzグリフ情報
  * @param hb_positions HarfBuzz位置情報
  * @param num_glyphs グリフの数
- * @param canvas キャンバス(?)
+ * @param canvas レンダリング出力先のピクセルバッファ [out]
  * @param cell_width セルの幅
  * @param cell_height セルの高さ
  * @param num_cells セルの個数

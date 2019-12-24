@@ -33,6 +33,9 @@ typedef struct {
     float left, top, right, bottom;
 } ImageRect;
 
+/**
+ * 画像参照
+ */
 typedef struct {
     uint32_t src_width, src_height, src_x, src_y;
     uint32_t cell_x_offset, cell_y_offset, num_cols, num_rows, effective_num_rows, effective_num_cols;
@@ -41,7 +44,9 @@ typedef struct {
     ImageRect src_rect;
 } ImageRef;
 
-
+/**
+ * 画像
+ */
 typedef struct {
     uint32_t texture_id, client_id, width, height;
     id_type internal_id;
@@ -62,6 +67,9 @@ typedef struct {
     id_type image_id;
 } ImageRenderData;
 
+/**
+ * グラフィックマネージャ
+ */
 typedef struct {
     PyObject_HEAD
 
@@ -69,7 +77,7 @@ typedef struct {
     id_type loading_image;
     GraphicsCommand last_init_graphics_command;
     Image *images;
-    size_t count, capacity;
+    size_t count, capacity; // TODO: カウントって何？
     ImageRenderData *render_data;
     bool layers_dirty;
     size_t num_of_negative_refs, num_of_positive_refs;

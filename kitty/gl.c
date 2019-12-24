@@ -16,31 +16,33 @@ static void
 check_for_gl_error(void UNUSED *ret, const char *name, GLADapiproc UNUSED funcptr, int UNUSED len_args, ...) {
 #define f(msg) fatal("OpenGL error: %s (calling function: %s)", msg, name); break;
     GLenum code = glad_glGetError();
-    switch(code) {
-        case GL_NO_ERROR: break;
-        case GL_INVALID_ENUM:
-            f("An enum value is invalid (GL_INVALID_ENUM)");
-        case GL_INVALID_VALUE:
-            f("An numeric value is invalid (GL_INVALID_VALUE)");
-        case GL_INVALID_OPERATION:
-            f("This operation is invalid (GL_INVALID_OPERATION)");
-        case GL_INVALID_FRAMEBUFFER_OPERATION:
-            f("The framebuffer object is not complete (GL_INVALID_FRAMEBUFFER_OPERATION)");
-        case GL_OUT_OF_MEMORY:
-            f("There is not enough memory left to execute the command. (GL_OUT_OF_MEMORY)");
-        case GL_STACK_UNDERFLOW:
-            f("An attempt has been made to perform an operation that would cause an internal stack to underflow. (GL_STACK_UNDERFLOW)");
-        case GL_STACK_OVERFLOW:
-            f("An attempt has been made to perform an operation that would cause an internal stack to overflow. (GL_STACK_OVERFLOW)");
-        default:
-            fatal("An unknown OpenGL error occurred with code: %d (calling function: %s)", code, name);
-            break;
+    switch (code) {
+    case GL_NO_ERROR: break;
+    case GL_INVALID_ENUM:
+        f("An enum value is invalid (GL_INVALID_ENUM)");
+    case GL_INVALID_VALUE:
+        f("An numeric value is invalid (GL_INVALID_VALUE)");
+    case GL_INVALID_OPERATION:
+        f("This operation is invalid (GL_INVALID_OPERATION)");
+    case GL_INVALID_FRAMEBUFFER_OPERATION:
+        f("The framebuffer object is not complete (GL_INVALID_FRAMEBUFFER_OPERATION)");
+    case GL_OUT_OF_MEMORY:
+        f("There is not enough memory left to execute the command. (GL_OUT_OF_MEMORY)");
+    case GL_STACK_UNDERFLOW:
+        f(
+            "An attempt has been made to perform an operation that would cause an internal stack to underflow. (GL_STACK_UNDERFLOW)");
+    case GL_STACK_OVERFLOW:
+        f("An attempt has been made to perform an operation that would cause an internal stack to overflow. (GL_STACK_OVERFLOW)");
+    default:
+        fatal("An unknown OpenGL error occurred with code: %d (calling function: %s)", code, name);
+        break;
     }
-}
+} /* check_for_gl_error */
 
 void
 gl_init() {
     static bool glad_loaded = false;
+
     if (!glad_loaded) {
         int gl_version = gladLoadGL(glfwGetProcAddress);
         if (!gl_version) {
@@ -51,20 +53,23 @@ gl_init() {
         }
         gladSetGLPostCallback(check_for_gl_error);
 #define ARB_TEST(name) \
-        if (!GLAD_GL_ARB_##name) { \
-            fatal("The OpenGL driver on this system is missing the required extension: ARB_%s", #name); \
-        }
+    if (!GLAD_GL_ARB_ ## name) { \
+        fatal("The OpenGL driver on this system is missing the required extension: ARB_%s", #name); \
+    }
         ARB_TEST(texture_storage);
 #undef ARB_TEST
         glad_loaded = true;
         int gl_major = GLAD_VERSION_MAJOR(gl_version);
         int gl_minor = GLAD_VERSION_MINOR(gl_version);
-        if (global_state.debug_gl) printf("GL version string: '%s' Detected version: %d.%d\n", glGetString(GL_VERSION), gl_major, gl_minor);
-        if (gl_major < OPENGL_REQUIRED_VERSION_MAJOR || (gl_major == OPENGL_REQUIRED_VERSION_MAJOR && gl_minor < OPENGL_REQUIRED_VERSION_MINOR)) {
+        if (global_state.debug_gl) {
+            printf("GL version string: '%s' Detected version: %d.%d\n", glGetString(GL_VERSION), gl_major, gl_minor);
+        }
+        if (gl_major < OPENGL_REQUIRED_VERSION_MAJOR ||
+            (gl_major == OPENGL_REQUIRED_VERSION_MAJOR && gl_minor < OPENGL_REQUIRED_VERSION_MINOR)) {
             fatal("OpenGL version is %d.%d, version >= 3.3 required for kitty", gl_major, gl_minor);
         }
     }
-}
+} /* gl_init */
 
 void
 update_surface_size(int w, int h, GLuint offscreen_texture_id) {
@@ -81,7 +86,6 @@ free_texture(GLuint *tex_id) {
     *tex_id = 0;
 }
 
-
 // }}}
 
 // Programs {{{
@@ -91,6 +95,7 @@ static Program programs[64] = {{0}};
 GLuint
 compile_shader(GLenum shader_type, const char *source) {
     GLuint shader_id = glCreateShader(shader_type);
+
     glShaderSource(shader_id, 1, (const GLchar **)&source, NULL);
     glCompileShader(shader_id);
     GLint ret = GL_FALSE;
@@ -107,20 +112,24 @@ compile_shader(GLenum shader_type, const char *source) {
     return shader_id;
 }
 
-Program*
-program_ptr(int program) { return programs + (size_t)program; }
+Program *
+program_ptr(int program) {
+    return programs + (size_t)program;
+}
 
 GLuint
-program_id(int program) { return programs[program].id; }
-
+program_id(int program) {
+    return programs[program].id;
+}
 
 void
 init_uniforms(int program) {
     Program *p = programs + program;
+
     glGetProgramiv(p->id, GL_ACTIVE_UNIFORMS, &(p->num_of_uniforms));
     for (GLint i = 0; i < p->num_of_uniforms; i++) {
         Uniform *u = p->uniforms + i;
-        glGetActiveUniform(p->id, (GLuint)i, sizeof(u->name)/sizeof(u->name[0]), NULL, &(u->size), &(u->type), u->name);
+        glGetActiveUniform(p->id, (GLuint)i, sizeof(u->name) / sizeof(u->name[0]), NULL, &(u->size), &(u->type), u->name);
         u->location = glGetUniformLocation(p->id, u->name);
         u->idx = i;
     }
@@ -128,11 +137,13 @@ init_uniforms(int program) {
 
 GLint
 get_uniform_information(int program, const char *name, GLenum information_type) {
-    GLint q; GLuint t;
-    static const char* names[] = {""};
+    GLint q;
+    GLuint t;
+    static const char *names[] = {""};
+
     names[0] = name;
     GLuint pid = program_id(program);
-    glGetUniformIndices(pid, 1, (void*)names, &t);
+    glGetUniformIndices(pid, 1, (void *)names, &t);
     glGetActiveUniformsiv(pid, 1, &t, information_type, &q);
     return q;
 }
@@ -140,20 +151,24 @@ get_uniform_information(int program, const char *name, GLenum information_type) 
 GLint
 attrib_location(int program, const char *name) {
     GLint ans = glGetAttribLocation(programs[program].id, name);
+
     return ans;
 }
 
 GLuint
 block_index(int program, const char *name) {
     GLuint ans = glGetUniformBlockIndex(programs[program].id, name);
-    if (ans == GL_INVALID_INDEX) { fatal("Could not find block index"); }
+
+    if (ans == GL_INVALID_INDEX) {
+        fatal("Could not find block index");
+    }
     return ans;
 }
-
 
 GLint
 block_size(int program, GLuint block_index) {
     GLint ans;
+
     glGetActiveUniformBlockiv(programs[program].id, block_index, GL_UNIFORM_BLOCK_DATA_SIZE, &ans);
     return ans;
 }
@@ -167,6 +182,7 @@ void
 unbind_program(void) {
     glUseProgram(0);
 }
+
 // }}}
 
 // Buffers {{{
@@ -177,14 +193,14 @@ typedef struct {
     GLenum usage;
 } Buffer;
 
-
 static Buffer buffers[MAX_CHILDREN * 6 + 4] = {{0}};
 
 static ssize_t
 create_buffer(GLenum usage) {
     GLuint buffer_id;
+
     glGenBuffers(1, &buffer_id);
-    for (size_t i = 0; i < sizeof(buffers)/sizeof(buffers[0]); i++) {
+    for (size_t i = 0; i < sizeof(buffers) / sizeof(buffers[0]); i++) {
         if (buffers[i].id == 0) {
             buffers[i].id = buffer_id;
             buffers[i].size = 0;
@@ -217,16 +233,24 @@ unbind_buffer(ssize_t buf_idx) {
 
 static inline void
 alloc_buffer(ssize_t idx, GLsizeiptr size, GLenum usage) {
-    Buffer *b = buffers + idx;
-    if (b->size == size) return;
-    b->size = size;
-    glBufferData(b->usage, size, NULL, usage);
+    Buffer *buffer = &buffers[idx];
+
+    if (buffer->size == size) {
+        return;
+    }
+    buffer->size = size;
+    glBufferData(buffer->usage, size, NULL, usage);
 }
 
-static inline void*
+/**
+ * バッファをマップする
+ *
+ * \param[in] idx 対象バッファのインデックス
+ * \param[in] access アクセスタイプ
+ */
+static inline void *
 map_buffer(ssize_t idx, GLenum access) {
-    void *ans = glMapBuffer(buffers[idx].usage, access);
-    return ans;
+    return glMapBuffer(buffers[idx].usage, access);
 }
 
 static inline void
@@ -244,20 +268,30 @@ typedef struct {
     ssize_t buffers[10];
 } VAO;
 
-static VAO vaos[4*MAX_CHILDREN + 10] = {{0}};
+static VAO vaos[4 * MAX_CHILDREN + 10] = {{0}};
 
+/**
+ * VAOを作る
+ *
+ * \return 生成したVAOを指す`vaos`のインデックス
+ */
 ssize_t
 create_vao(void) {
+    // 頂点配列を生成する
     GLuint vao_id;
     glGenVertexArrays(1, &vao_id);
-    for (size_t i = 0; i < sizeof(vaos)/sizeof(vaos[0]); i++) {
-        if (!vaos[i].id) {
+
+    // 空きスロットに生成した頂点配列のIDをいれる
+    for (size_t i = 0; i < sizeof(vaos) / sizeof(vaos[0]); i++) {
+        if (vaos[i].id == 0) {
             vaos[i].id = vao_id;
             vaos[i].num_buffers = 0;
             glBindVertexArray(vao_id);
             return i;
         }
     }
+
+    // 空きスロットがなかったら、諦めて、頂点配列を削除する
     glDeleteVertexArrays(1, &vao_id);
     fatal("Too many VAOs");
     return -1;
@@ -265,7 +299,8 @@ create_vao(void) {
 
 size_t
 add_buffer_to_vao(ssize_t vao_idx, GLenum usage) {
-    VAO* vao = vaos + vao_idx;
+    VAO *vao = vaos + vao_idx;
+
     if (vao->num_buffers >= sizeof(vao->buffers) / sizeof(vao->buffers[0])) {
         fatal("Too many buffers in a single VAO");
     }
@@ -275,42 +310,61 @@ add_buffer_to_vao(ssize_t vao_idx, GLenum usage) {
 }
 
 static void
-add_located_attribute_to_vao(ssize_t vao_idx, GLint aloc, GLint size, GLenum data_type, GLsizei stride, void *offset, GLuint divisor) {
+add_located_attribute_to_vao(ssize_t vao_idx,
+                             GLint aloc,
+                             GLint size,
+                             GLenum data_type,
+                             GLsizei stride,
+                             void *offset,
+                             GLuint divisor) {
     VAO *vao = vaos + vao_idx;
-    if (!vao->num_buffers) fatal("You must create a buffer for this attribute first");
+
+    if (!vao->num_buffers) {
+        fatal("You must create a buffer for this attribute first");
+    }
     ssize_t buf = vao->buffers[vao->num_buffers - 1];
     bind_buffer(buf);
     glEnableVertexAttribArray(aloc);
-    switch(data_type) {
-        case GL_BYTE:
-        case GL_UNSIGNED_BYTE:
-        case GL_SHORT:
-        case GL_UNSIGNED_SHORT:
-        case GL_INT:
-        case GL_UNSIGNED_INT:
-            glVertexAttribIPointer(aloc, size, data_type, stride, offset);
-            break;
-        default:
-            glVertexAttribPointer(aloc, size, data_type, GL_FALSE, stride, offset);
-            break;
+    switch (data_type) {
+    case GL_BYTE:
+    case GL_UNSIGNED_BYTE:
+    case GL_SHORT:
+    case GL_UNSIGNED_SHORT:
+    case GL_INT:
+    case GL_UNSIGNED_INT:
+        glVertexAttribIPointer(aloc, size, data_type, stride, offset);
+        break;
+    default:
+        glVertexAttribPointer(aloc, size, data_type, GL_FALSE, stride, offset);
+        break;
     }
     if (divisor) {
         glVertexAttribDivisor(aloc, divisor);
     }
     unbind_buffer(buf);
-}
-
+} /* add_located_attribute_to_vao */
 
 void
-add_attribute_to_vao(int p, ssize_t vao_idx, const char *name, GLint size, GLenum data_type, GLsizei stride, void *offset, GLuint divisor) {
+add_attribute_to_vao(int p,
+                     ssize_t vao_idx,
+                     const char *name,
+                     GLint size,
+                     GLenum data_type,
+                     GLsizei stride,
+                     void *offset,
+                     GLuint divisor) {
     GLint aloc = attrib_location(p, name);
-    if (aloc == -1) fatal("No attribute named: %s found in this program", name);
+
+    if (aloc == -1) {
+        fatal("No attribute named: %s found in this program", name);
+    }
     add_located_attribute_to_vao(vao_idx, aloc, size, data_type, stride, offset, divisor);
 }
 
 void
 remove_vao(ssize_t vao_idx) {
     VAO *vao = vaos + vao_idx;
+
     while (vao->num_buffers) {
         vao->num_buffers--;
         delete_buffer(vao->buffers[vao->num_buffers]);
@@ -329,38 +383,61 @@ unbind_vertex_array(void) {
     glBindVertexArray(0);
 }
 
+/**
+ * VAOバッファの確保
+ *
+ * \param[in] vao_idx VAOインデックス
+ * \param[in] size バッファのサイズ
+ * \param[in] bufnum バッファ番号
+ * \param[in] usage 用途
+ */
 ssize_t
 alloc_vao_buffer(ssize_t vao_idx, GLsizeiptr size, size_t bufnum, GLenum usage) {
-    ssize_t buf_idx = vaos[vao_idx].buffers[bufnum];
-    bind_buffer(buf_idx);
-    alloc_buffer(buf_idx, size, usage);
-    return buf_idx;
+    // バッファをバインドする
+    const ssize_t i = vaos[vao_idx].buffers[bufnum];
+
+    bind_buffer(i);
+
+    alloc_buffer(i, size, usage);
+    return i;
 }
 
-void*
+void *
 map_vao_buffer(ssize_t vao_idx, size_t bufnum, GLenum access) {
-    ssize_t buf_idx = vaos[vao_idx].buffers[bufnum];
-    bind_buffer(buf_idx);
-    return map_buffer(buf_idx, access);
+    const ssize_t i = vaos[vao_idx].buffers[bufnum];
+
+    bind_buffer(i);
+    return map_buffer(i, access);
 }
 
-void*
+/**
+ * VAOバッファを確保して割り当てる
+ *
+ * \param[in] vao_idx VAOインデックス
+ * \param[in] size バッファサイズ
+ * \param[in] bufnum バッファ番号
+ * \param[in] usage 用途
+ * \param[in] access バッファアクセス種別
+ */
+void *
 alloc_and_map_vao_buffer(ssize_t vao_idx, GLsizeiptr size, size_t bufnum, GLenum usage, GLenum access) {
-    ssize_t buf_idx = alloc_vao_buffer(vao_idx, size, bufnum, usage);
-    return map_buffer(buf_idx, access);
+    const ssize_t i = alloc_vao_buffer(vao_idx, size, bufnum, usage);
+
+    return map_buffer(i, access);
 }
 
 void
 bind_vao_uniform_buffer(ssize_t vao_idx, size_t bufnum, GLuint block_index) {
     ssize_t buf_idx = vaos[vao_idx].buffers[bufnum];
+
     glBindBufferBase(GL_UNIFORM_BUFFER, block_index, buffers[buf_idx].id);
 }
 
 void
 unmap_vao_buffer(ssize_t vao_idx, size_t bufnum) {
-    ssize_t buf_idx = vaos[vao_idx].buffers[bufnum];
-    unmap_buffer(buf_idx);
-    unbind_buffer(buf_idx);
+    const ssize_t i = vaos[vao_idx].buffers[bufnum];
+    unmap_buffer(i); // バッファのマップ解除 (glUnmapBuffer)
+    unbind_buffer(i); // バッファのバインド解除 (glBindBuffer(0))
 }
 
 // }}}

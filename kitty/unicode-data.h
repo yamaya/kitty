@@ -3,11 +3,13 @@
 
 /**
  * 異体字セレクタ(Variation Selector) 15
+ *  絵文字のテキストスタイル
  */
 #define VS15 1280
 
 /**
  * 異体字セレクタ(Variation Selector) 16
+ *  絵文字のカラー・アニメーションスタイル
  */
 #define VS16 1281
 

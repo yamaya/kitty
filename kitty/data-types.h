@@ -251,8 +251,32 @@ typedef struct {
  * CPUセル
  */
 typedef struct {
-    char_type ch; /** 文字コード */
-    combining_type cc_idx[2]; /** 異体字セレクタ */
+    /**
+     * 文字コード
+     *
+     * \note char_type = uint32_t
+     */
+    char_type ch;
+
+    /**
+     * 結合文字 (Combining Character) の記号部分
+     *
+     * ここでは、記号のコードポイントをインデックスに変換した値(マークと呼称し
+     * ている)を格納している点に注意。
+     * メンバ名が `_idx` で終わっているのもこれが理由だろう。
+     *
+     * なお、UNICODE仕様の語録では "記号" は "Mark" と呼称されている。
+     * このメンバの値に関するコードで "mark" と言う単語がよく使われるのはこれが
+     * 理由だろう。
+     *
+     * このメンバに代入する箇所:
+     * - line.c の line_add_combining_char 関数
+     * - screen.c の screen_tab 関数
+     *
+     * \note combining_type = uint16_t
+     * \note ch がタブ文字の場合はタブ位置までの桁数が格納される(screen.cのscreen_tabを参照のこと)
+     */
+    combining_type cc_idx[2];
 } CPUCell;
 
 /**
@@ -411,7 +435,10 @@ typedef struct {FONTS_DATA_HEAD} *FONTS_DATA_HANDLE;
 #define PARSER_BUF_SZ   (8 * 1024)
 #define READ_BUF_SZ     (1024 *1024)
 
-#define clear_sprite_position(cell)          (cell).sprite_x = 0; (cell).sprite_y = 0; (cell).sprite_z = 0;
+#define clear_sprite_position(cell) \
+    (cell).sprite_x = 0; \
+    (cell).sprite_y = 0; \
+    (cell).sprite_z = 0;
 
 #define left_shift_line(line, at, num)       { \
         for (index_type __i__ = (at); __i__ < (line)->xnum - (num); __i__ ++) { \
@@ -424,16 +451,17 @@ typedef struct {FONTS_DATA_HEAD} *FONTS_DATA_HANDLE;
         } \
 }
 
-#define ensure_space_for(base, array, type, num, capacity, initial_cap, zero_mem) \
+#define ensure_space_for(base, array, type, num, capacity, initial_cap, zero_clear) do { \
     if ((base)->capacity < num) { \
-        size_t _newcap = MAX((size_t)initial_cap, MAX(2 *(base)->capacity, (size_t)num)); \
+        size_t _newcap = MAX((size_t)initial_cap, MAX(2 * (base)->capacity, (size_t)num)); \
         (base)->array = realloc((base)->array, sizeof(type) *_newcap); \
         if ((base)->array == NULL) \
-        fatal("Out of memory while ensuring space for %zu elements in array of %s", (size_t)num, #type); \
-        if (zero_mem) \
-        memset((base)->array + (base)->capacity, 0, sizeof(type) *(_newcap - (base)->capacity)); \
+            fatal("Out of memory while ensuring space for %zu elements in array of %s", (size_t)num, #type); \
+        if (zero_clear) \
+            memset((base)->array + (base)->capacity, 0, sizeof(type) *(_newcap - (base)->capacity)); \
         (base)->capacity = _newcap; \
-    }
+    } \
+} while (false)
 
 #define remove_i_from_array(array, i, count) \
     do { \

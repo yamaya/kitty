@@ -278,11 +278,21 @@ set_configured_colors(ColorProfile *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+/**
+ * 色テーブルの内容をバッファにコピーする
+ *
+ * \param[in] self ColorProfileオブジェクト
+ * \param[in] buf バッファ
+ * \param[in] offset (バッファに対する)オフセット
+ * \param[in] stride (バッファに対する)ストライド
+ */
 void
 copy_color_table_to_buffer(ColorProfile *self, color_type *buf, int offset, size_t stride) {
     size_t i;
     stride = MAX(1u, stride);
-    for (i = 0, buf = buf + offset; i < sizeof(self->color_table)/sizeof(self->color_table[0]); i++, buf += stride) {
+    for (i = 0, buf = buf + offset;
+         i < sizeof(self->color_table) / sizeof(self->color_table[0]);
+         i++, buf += stride) {
         *buf = self->color_table[i];
     }
     self->dirty = false;

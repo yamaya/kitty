@@ -8,6 +8,9 @@
 #include "gl.h"
 #include <stddef.h>
 
+/**
+ * シェーダープログラムインデックス
+ */
 enum {
     CELL_PROGRAM,
     CELL_BG_PROGRAM,
@@ -121,40 +124,62 @@ copy_image_sub_data(GLuint src_texture_id,
     }
 } /* copy_image_sub_data */
 
+/**
+ * スプライト用テクスチャを再確保する
+ *
+ * \param[in] fg フォントグループ
+ */
 static void
 realloc_sprite_texture(FONTS_DATA_HANDLE fg) {
     GLuint tex;
 
+    // テクスチャを生成してバンドする
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
-    // We use GL_NEAREST otherwise glyphs that touch the edge of the cell
-    // often show a border between cells
+
+    // GL_NEARESTを使用します。そうしないと、セルの端に触れるグリフがしばしばセ
+    // ル間の境界線にかぶります。
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    unsigned int xnum, ynum, z, znum, width, height, src_ynum;
-    sprite_tracker_current_layout(fg, &xnum, &ynum, &z);
-    znum = z + 1;
-    SpriteMap *sprite_map = (SpriteMap *)fg->sprite_map;
-    width = xnum * sprite_map->cell_width;
-    height = ynum * sprite_map->cell_height;
-    glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, width, height, znum);
-    if (sprite_map->texture_id) {
-        // need to re-alloc
-        src_ynum = MAX(1, sprite_map->last_ynum);
-        copy_image_sub_data(sprite_map->texture_id,
+
+    // スプライトトラッカーから現在状況を取得する
+    unsigned int xmax, ymax, z, zmax;
+    sprite_tracker_current_layout(fg, &xmax, &ymax, &z);
+    zmax = z + 1;
+
+    // スプライトマップからセル寸法を取得してテクスチャ寸法を計算する
+    SpriteMap *map = (SpriteMap *)fg->sprite_map;
+    const unsigned int width = xmax * map->cell_width;
+    const unsigned int height = ymax * map->cell_height;
+
+    // テクスチャ領域の確保
+    glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, width, height, zmax);
+
+    // 既存テクスチャの削除
+    if (map->texture_id) {
+
+        // 既存テクスチャから新しいテクスチャに内容をコピーする
+        const unsigned int src_ynum = MAX(1, map->last_ynum);
+        copy_image_sub_data(map->texture_id,
                             tex,
                             width,
-                            src_ynum * sprite_map->cell_height,
-                            sprite_map->last_num_of_layers);
-        glDeleteTextures(1, &sprite_map->texture_id);
+                            src_ynum * map->cell_height,
+                            map->last_num_of_layers);
+
+        // 既存テクスチャの削除
+        glDeleteTextures(1, &map->texture_id);
     }
+
+    // バインドを解除
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
-    sprite_map->last_num_of_layers = znum;
-    sprite_map->last_ynum = ynum;
-    sprite_map->texture_id = tex;
-} /* realloc_sprite_texture */
+
+    // スプライトマップ情報の更新
+    map->last_num_of_layers = zmax;
+    map->last_ynum = ymax;
+    map->texture_id = tex;
+}
 
 static inline void
 ensure_sprite_map(FONTS_DATA_HANDLE fg) {
@@ -169,26 +194,46 @@ ensure_sprite_map(FONTS_DATA_HANDLE fg) {
     glBindTexture(GL_TEXTURE_2D_ARRAY, sprite_map->texture_id);
 }
 
+/**
+ * スプライトをGPUに転送する
+ *
+ * \param[in] fg フォントグループ
+ * \param[in] x x座標
+ * \param[in] y y座標
+ * \param[in] z z座標
+ * \param[in] pixel ピクセルバッファ (CoreTextでグリフを描画したビットマップコンテキスト)
+ */
 void
 send_sprite_to_gpu(FONTS_DATA_HANDLE fg, unsigned int x, unsigned int y, unsigned int z, pixel *buf) {
-    SpriteMap *sprite_map = (SpriteMap *)fg->sprite_map;
-    unsigned int xnum, ynum, znum;
+    SpriteMap *map = (SpriteMap *)fg->sprite_map;
 
+    // zもしくはyが現在領域を超えた場合はスプライトテクスチ
+    // ャを再確保する
+    unsigned int xnum, ynum, znum;
     sprite_tracker_current_layout(fg, &xnum, &ynum, &znum);
-    if ((int)znum >= sprite_map->last_num_of_layers || (znum == 0 && (int)ynum > sprite_map->last_ynum)) {
+    if ((int)znum >= map->last_num_of_layers ||
+        (znum == 0 && (int)ynum > map->last_ynum)) {
         realloc_sprite_texture(fg);
     }
-    glBindTexture(GL_TEXTURE_2D_ARRAY, sprite_map->texture_id);
+
+    // テクスチャをバインド
+    glBindTexture(GL_TEXTURE_2D_ARRAY, map->texture_id);
+
+    // テクスチャのアライメントを設定
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    x *= sprite_map->cell_width;
-    y *= sprite_map->cell_height;
+
+    // テクスチャ座標に変換する
+    x *= map->cell_width;
+    y *= map->cell_height;
+
+    // テクスチャに対してピクセルバッファの指定領域を転送する
     glTexSubImage3D(GL_TEXTURE_2D_ARRAY,
-                    0,
+                    0, // level: 詳細度
                     x,
                     y,
                     z,
-                    sprite_map->cell_width,
-                    sprite_map->cell_height,
+                    map->cell_width,
+                    map->cell_height,
                     1,
                     GL_RGBA,
                     GL_UNSIGNED_INT_8_8_8_8,
@@ -213,38 +258,62 @@ send_image_to_gpu(GLuint *tex_id, const void *data, GLsizei width, GLsizei heigh
 
 // Cell {{{
 
+/**
+ * セルに関するシェーダプログラムのメモリレイアウト構造体
+ */
 typedef struct {
-    UniformBlock render_data;
-    ArrayInformation color_table;
+    UniformBlock render_data; /** ユニフォーム変数 */
+    ArrayInformation color_table; /** 色テーブル */
 } CellProgramLayout;
 
+/**
+ * セルに関するシェーダプログラムのメモリレイアウト
+ */
 static CellProgramLayout cell_program_layouts[NUM_PROGRAMS];
+
+/**
+ * オフスクリーンフレームバッファ
+ */
 static GLuint offscreen_framebuffer = 0;
+
+/**
+ * TODO: なぞ
+ */
 static ssize_t blit_vertex_array;
 
+/**
+ * セルに関するシェーダープログラムを初期化する 
+ */
 static void
 init_cell_program(void) {
     for (int i = CELL_PROGRAM; i < BORDERS_PROGRAM; i++) {
-        cell_program_layouts[i].render_data.index = block_index(i, "CellRenderData");
-        cell_program_layouts[i].render_data.size = block_size(i, cell_program_layouts[i].render_data.index);
-        cell_program_layouts[i].color_table.size = get_uniform_information(i, "color_table[0]", GL_UNIFORM_SIZE);
-        cell_program_layouts[i].color_table.offset = get_uniform_information(i, "color_table[0]", GL_UNIFORM_OFFSET);
-        cell_program_layouts[i].color_table.stride = get_uniform_information(i, "color_table[0]", GL_UNIFORM_ARRAY_STRIDE);
+        CellProgramLayout *layout = &cell_program_layouts[i];
+        layout->render_data.index = block_index(i, "CellRenderData");
+        layout->render_data.size = block_size(i, layout->render_data.index);
+        layout->color_table.size = get_uniform_information(i, "color_table[0]", GL_UNIFORM_SIZE);
+        layout->color_table.offset = get_uniform_information(i, "color_table[0]", GL_UNIFORM_OFFSET);
+        layout->color_table.stride = get_uniform_information(i, "color_table[0]", GL_UNIFORM_ARRAY_STRIDE);
     }
-    // Sanity check to ensure the attribute location binding worked
-#define C(p, name, expected) {int aloc = attrib_location(p, #name); if (aloc != expected && aloc != -1) fatal( \
-                                  "The attribute location for %s is %d != %d in program: %d", \
-                                  #name, \
-                                  aloc, \
-                                  expected, \
-                                  p);}
+
+    // 属性位置のバインドが機能することを確認するための健全性チェック
+#define C(p, name, expected) do { \
+    const int aloc = attrib_location(p, #name); \
+    if (aloc != expected && aloc != -1) \
+        fatal("The attribute location for %s is %d != %d in program: %d", #name, aloc, expected, p); \
+} while (false)
+
     for (int p = CELL_PROGRAM; p < BORDERS_PROGRAM; p++) {
         C(p, colors, 0);
         C(p, sprite_coords, 1);
         C(p, is_selected, 2);
     }
+
 #undef C
+
+    // オフスクリーンフレームバッファを生成する
     glGenFramebuffers(1, &offscreen_framebuffer);
+
+    // ？
     blit_vertex_array = create_vao();
 }
 
@@ -307,37 +376,64 @@ send_graphics_data_to_gpu(size_t image_count, ssize_t gvao_idx, const ImageRende
     a = NULL;
 }
 
+/**
+ * ユニフォーム変数を更新する
+ *
+ * \param[in] vao_idx VAOインデックス
+ * \param[in] screen スクリーン
+ * \param[in] uniform_buffer ユニフォームバッファ
+ * \param[in] xstart 開始位置のx座標
+ * \param[in] ystart 開始位置のy座標
+ * \param[in] dx ビューポート(デバイス)座標系のセル幅
+ * \param[in] dy ビューポート(デバイス)座標系のセル高
+ * \param[in] cursor カーソルレンダリング情報
+ * \param[in] inverted 反転する
+ * \param[in] os_window OSウィンドウ
+ */
 static inline void
-cell_update_uniform_block(ssize_t vao_idx,
-                          Screen *screen,
-                          int uniform_buffer,
-                          GLfloat xstart,
-                          GLfloat ystart,
-                          GLfloat dx,
-                          GLfloat dy,
-                          CursorRenderInfo *cursor,
-                          bool inverted,
-                          OSWindow *os_window) {
+cell_update_uniform_block(
+    ssize_t vao_idx,
+    Screen *screen,
+    int uniform_buffer,
+    GLfloat xstart,
+    GLfloat ystart,
+    GLfloat dx,
+    GLfloat dy,
+    CursorRenderInfo *cursor,
+    bool inverted,
+    OSWindow *os_window
+) {
+    // WIP
     struct CellRenderData {
-        GLfloat xstart, ystart, dx, dy, sprite_dx, sprite_dy, background_opacity, cursor_text_uses_bg;
-
-        GLuint default_fg, default_bg, highlight_fg, highlight_bg, cursor_color, cursor_text_color, url_color, url_style,
-               inverted;
-
-        GLuint xnum, ynum, cursor_fg_sprite_idx;
+        GLfloat xstart, ystart;
+        GLfloat dx, dy;
+        GLfloat sprite_dx, sprite_dy;
+        GLfloat background_opacity;
+        GLfloat cursor_text_uses_bg;
+        GLuint default_fg, default_bg;
+        GLuint highlight_fg, highlight_bg;
+        GLuint cursor_color, cursor_text_color;
+        GLuint url_color, url_style;
+        GLuint inverted;
+        GLuint xnum, ynum;
+        GLuint cursor_fg_sprite_idx; // カーソル形状へのインデックス(*1)
         GLfloat cursor_x, cursor_y, cursor_w;
     };
-    static struct CellRenderData *rd;
+    static struct CellRenderData *rd; // TODO: 何でstatic?
 
-    // Send the uniform data
+    // とにかく rd を構成するコードが延々続く
     rd = (struct CellRenderData *)map_vao_buffer(vao_idx, uniform_buffer, GL_WRITE_ONLY);
+
+    // 色テーブルをバッファにコピーする
     if (UNLIKELY(screen->color_profile->dirty || screen->reload_all_gpu_data)) {
-        copy_color_table_to_buffer(screen->color_profile,
-                                   (GLuint *)rd,
-                                   cell_program_layouts[CELL_PROGRAM].color_table.offset / sizeof(GLuint),
-                                   cell_program_layouts[CELL_PROGRAM].color_table.stride / sizeof(GLuint));
+        copy_color_table_to_buffer(
+                screen->color_profile,
+                (GLuint *)rd,
+                cell_program_layouts[CELL_PROGRAM].color_table.offset / sizeof(GLuint),
+                cell_program_layouts[CELL_PROGRAM].color_table.stride / sizeof(GLuint));
     }
-    // Cursor position
+
+    // カーソル形状へのインデックス(*1)
     enum {
         BLOCK_IDX     = 0,
         BEAM_IDX      = 6,
@@ -345,7 +441,8 @@ cell_update_uniform_block(ssize_t vao_idx,
         UNFOCUSED_IDX = 8
     };
     if (cursor->is_visible) {
-        rd->cursor_x = screen->cursor->x, rd->cursor_y = screen->cursor->y;
+        rd->cursor_x = screen->cursor->x;
+        rd->cursor_y = screen->cursor->y;
         if (cursor->is_focused) {
             switch (cursor->shape) {
             default:
@@ -364,13 +461,13 @@ cell_update_uniform_block(ssize_t vao_idx,
         }
     }
     else {
-        rd->cursor_x = screen->columns, rd->cursor_y = screen->lines;
+        rd->cursor_x = screen->columns;
+        rd->cursor_y = screen->lines;
     }
-    rd->cursor_w = rd->cursor_x;
-    if (
-        (rd->cursor_fg_sprite_idx == BLOCK_IDX || rd->cursor_fg_sprite_idx == UNDERLINE_IDX) &&
-        screen_current_char_width(screen) > 1
-        ) {
+    rd->cursor_w = rd->cursor_x; // あれ？そうなの？ `_w` って何？
+    if ((rd->cursor_fg_sprite_idx == BLOCK_IDX ||
+         rd->cursor_fg_sprite_idx == UNDERLINE_IDX) &&
+        screen_current_char_width(screen) > 1) {
         rd->cursor_w += 1;
     }
 
@@ -386,25 +483,33 @@ cell_update_uniform_block(ssize_t vao_idx,
     rd->sprite_dx = 1.0f / (float)x;
     rd->sprite_dy = 1.0f / (float)y;
     rd->inverted = inverted ? 1 : 0;
-    rd->background_opacity = os_window->is_semi_transparent ? os_window->background_opacity : 1.0f;
+    rd->background_opacity =
+        os_window->is_semi_transparent ?
+            os_window->background_opacity : 1.0f;
 
-#define COLOR(name) colorprofile_to_color(screen->color_profile, \
-                                          screen->color_profile->overridden.name, \
-                                          screen->color_profile->configured.name)
+#define COLOR(name) \
+    colorprofile_to_color( \
+            screen->color_profile, \
+            screen->color_profile->overridden.name, \
+            screen->color_profile->configured.name)
+
     rd->default_fg = COLOR(default_fg);
     rd->default_bg = COLOR(default_bg);
     rd->highlight_fg = COLOR(highlight_fg);
     rd->highlight_bg = COLOR(highlight_bg);
     rd->cursor_text_color = COLOR(cursor_text_color);
+
 #undef COLOR
+
     rd->cursor_color = cursor->color;
     rd->url_color = OPT(url_color);
     rd->url_style = OPT(url_style);
     rd->cursor_text_uses_bg = cursor_text_as_bg(screen->color_profile);
 
+    // VAOバッファのマップを解除する
     unmap_vao_buffer(vao_idx, uniform_buffer);
     rd = NULL;
-} /* cell_update_uniform_block */
+}
 
 /**
  * レダリングのためにセルを準備する
@@ -414,8 +519,8 @@ cell_update_uniform_block(ssize_t vao_idx,
  * @param screen スクリーン
  * @param xstart 開始位置のx座標
  * @param ystart 開始位置のy座標
- * @param dx 横幅?
- * @param dy 高さ?
+ * @param dx ビューポート(デバイス)座標系のセル幅
+ * @param dy ビューポート(デバイス)座標系のセル高
  * @param fonts_data FONTS_DATA_HANDLE
  */
 static inline bool
@@ -496,25 +601,49 @@ cell_prepare_to_render(ssize_t vao_idx,
     return changed;
 }
 
+/**
+ * グラフィックスを描画する
+ *  テクスチャの描画っぽい
+ *
+ * \param[in] program グラフィックス用シェーダープログラム
+ * \param[in] vao_idx VAOインデックス
+ * \param[in] gvao_idx グラフィックス用VAOインデックス
+ * \param[in] data 画像レンダリングデータの配列
+ * \param[in] start data上のインデックス
+ * \param[in] count レンダリングするdataの要素数
+ */
 static void
 draw_graphics(int program, ssize_t vao_idx, ssize_t gvao_idx, ImageRenderData *data, GLuint start, GLuint count) {
+    // シェーダー・プログラムをバインド
     bind_program(program);
+
+    // グラフィックス用頂点配列をバインド
     bind_vertex_array(gvao_idx);
+
+    // テクスチャをアクティブにする
     glActiveTexture(GL_TEXTURE0 + GRAPHICS_UNIT);
 
-    GLuint base = 4 * start;
+    // シザーテストを有効にする
     glEnable(GL_SCISSOR_TEST);
+
+    GLuint base = 4 * start;
     for (GLuint i = 0; i < count;) {
-        ImageRenderData *rd = data + start + i;
+        // テクスチャをバインド
+        ImageRenderData *rd = &data[start + i];
         glBindTexture(GL_TEXTURE_2D, rd->texture_id);
-        // You could reduce the number of draw calls by using
-        // glDrawArraysInstancedBaseInstance but Apple chose to abandon OpenGL
-        // before implementing it.
+
+        // glDrawArraysInstancedBaseInstanceを使用して描画呼び出しの回数を減ら
+        // すことができますが、AppleはOpenGLを実装する前に放棄することを選択し
+        // ました
         for (GLuint k = 0; k < rd->group_count; k++, base += 4, i++) {
             glDrawArrays(GL_TRIANGLE_FAN, base, 4);
         }
     }
+
+    // シザーテストを無効にする
     glDisable(GL_SCISSOR_TEST);
+
+    // 通常の頂点配列に戻す 
     bind_vertex_array(vao_idx);
 }
 
@@ -555,10 +684,22 @@ draw_centered_alpha_mask(ssize_t gvao_idx,
     glDisable(GL_BLEND);
 } /* draw_centered_alpha_mask */
 
+/**
+ * シンプルにセルを描画する
+ *
+ * \param[in] vao_idx VAOインデックス
+ * \param[in] gvao_idx グラフィックス用VAOインデックス
+ * \param[in] screen スクリーン
+ */
 static void
 draw_cells_simple(ssize_t vao_idx, ssize_t gvao_idx, Screen *screen) {
+    // シェーダ・プログラムをバインド
     bind_program(CELL_PROGRAM);
+
+    // インスタンス化配列を描画
     glDrawArraysInstanced(GL_TRIANGLE_FAN, 0, 4, screen->lines * screen->columns);
+
+    // グラフィックスの描画
     if (screen->grman->count) {
         glEnable(GL_BLEND);
         BLEND_ONTO_OPAQUE;
@@ -740,20 +881,39 @@ send_cell_data_to_gpu(ssize_t vao_idx,
     return changed;
 }
 
+/**
+ * セルを描画する
+ *
+ * \param[in] vao_idx VAOインデックス
+ * \param[in] gvao_idx G? VAOインデックス
+ * \param[in] xstart 開始位置のx座標
+ * \param[in] ystart 開始位置のy座標
+ * \param[in] dx ビューポート(デバイス)座標系のセル幅
+ * \param[in] dy ビューポート(デバイス)座標系のセル高
+ * \param[in] screen スクリーン
+ * \param[in] os_window OSウィンドウ
+ * \param[in] is_active_window ウィンドウがアクティブか否か
+ * \param[in] can_be_focused フォーカス可能かどうか
+ */
 void
-draw_cells(ssize_t vao_idx,
-           ssize_t gvao_idx,
-           GLfloat xstart,
-           GLfloat ystart,
-           GLfloat dx,
-           GLfloat dy,
-           Screen *screen,
-           OSWindow *os_window,
-           bool is_active_window,
-           bool can_be_focused) {
+draw_cells(
+    ssize_t vao_idx,
+    ssize_t gvao_idx,
+    GLfloat xstart,
+    GLfloat ystart,
+    GLfloat dx,
+    GLfloat dy,
+    Screen *screen,
+    OSWindow *os_window,
+    bool is_active_window,
+    bool can_be_focused
+) {
     CELL_BUFFERS;
-    bool inverted = screen_invert_colors(screen);
 
+    // 色の反転が必要かどうか判定する
+    const bool inverted = screen_invert_colors(screen);
+
+    // ユニフォーム変数を更新する
     cell_update_uniform_block(vao_idx,
                               screen,
                               uniform_buffer,
@@ -765,29 +925,43 @@ draw_cells(ssize_t vao_idx,
                               inverted,
                               os_window);
 
+    // VAOユニフォームバッファをバインドする
     bind_vao_uniform_buffer(vao_idx, uniform_buffer, cell_program_layouts[CELL_PROGRAM].render_data.index);
+
+    // 頂点配列をバインドする
     bind_vertex_array(vao_idx);
 
-    float current_inactive_text_alpha = (!can_be_focused || screen->cursor_render_info.is_focused) &&
-        is_active_window ? 1.0f : (float)OPT(inactive_text_alpha);
+    // インアクティブ時のテキストのアルファ値を算出する
+    const float current_inactive_text_alpha =
+        (!can_be_focused || screen->cursor_render_info.is_focused) && is_active_window ?
+        1.0f :
+        (float)OPT(inactive_text_alpha);
     set_cell_uniforms(current_inactive_text_alpha, screen->reload_all_gpu_data);
-    screen->reload_all_gpu_data = false;
-    GLfloat w = (GLfloat)screen->columns * dx, h = (GLfloat)screen->lines * dy;
-    // The scissor limits below are calculated to ensure that they do not
-    // overlap with the pixels outside the draw area,
-    // for a test case (scissor is also used to blit framebuffer in draw_cells_interleaved_premult) run:
-    // kitty -o background=cyan -o background_opacity=0.7 -o cursor_blink_interval=0 -o window_margin_width=40 sh -c "kitty +kitten icat logo/kitty.png; read"
-#define SCALE(w, x) ((GLfloat)(os_window->viewport_ ## w) * (GLfloat)(x))
-    /* printf("columns=%d dx=%f w=%f vw=%d vh=%d left=%f width=%f\n", screen->columns, dx, w, os_window->viewport_width, os_window->viewport_height, SCALE(width, (xstart + 1.f)/2.f), SCALE(width, w / 2.f)); */
 
+    screen->reload_all_gpu_data = false;
+    const GLfloat w = (GLfloat)screen->columns * dx;
+    const GLfloat h = (GLfloat)screen->lines * dy;
+    /*
+     * 以下のシザーの制限は、それらが描画領域の外側のピクセルとオーバーラップし
+     * 、テストケース（シザーは draw_cells_interleaved_premult でフレームバッフ
+     * ァーをブリットするためにも使用されます）の場合:
+     *
+     * kitty -o background=cyan -o background_opacity=0.7 -o cursor_blink_interval=0 -o window_margin_width=40 sh -c "kitty + kitten icat logo / kitty.png; read"
+     */   
+#define SCALE(w, x) ((GLfloat)(os_window->viewport_ ## w) * (GLfloat)(x))
+
+    // 指定した範囲外のピクセル描画を切る
     glScissor(
         (GLint)roundf(SCALE(width, (xstart + 1.f) / 2.f)),  // x
         (GLint)roundf(SCALE(height, (ystart - h + 1.f) / 2.f)),  // y
         (GLsizei)roundf(SCALE(width, w / 2.f)),  // width
         (GLsizei)roundf(SCALE(height, h / 2.f)) // height
-        );
+    );
+
 #undef SCALE
+
     if (os_window->is_semi_transparent) {
+        // ウィンドウの半透明処理
         if (screen->grman->count) {
             draw_cells_interleaved_premult(vao_idx, gvao_idx, screen, os_window);
         }
@@ -803,7 +977,7 @@ draw_cells(ssize_t vao_idx,
             draw_cells_simple(vao_idx, gvao_idx, screen);
         }
     }
-} /* draw_cells */
+}
 
 // }}}
 
@@ -860,19 +1034,29 @@ create_border_vao(void) {
     return vao_idx;
 }
 
+/**
+ * 枠線の描画
+ *
+ * \param[in] vao_idx VAOインデックス
+ * \param[in] num_border_rects 枠線矩形の数
+ * \param[in] rect_buf 枠線矩形の配列
+ */
 void
-draw_borders(ssize_t vao_idx,
-             unsigned int num_border_rects,
-             BorderRect *rect_buf,
-             bool rect_data_is_dirty,
-             uint32_t viewport_width,
-             uint32_t viewport_height,
-             color_type active_window_bg,
-             unsigned int num_visible_windows,
-             bool all_windows_have_same_bg,
-             OSWindow *w) {
+draw_borders(
+    ssize_t vao_idx,
+    unsigned int num_border_rects,
+    BorderRect *rect_buf,
+    bool rect_data_is_dirty,
+    uint32_t viewport_width,
+    uint32_t viewport_height,
+    color_type active_window_bg,
+    unsigned int num_visible_windows,
+    bool all_windows_have_same_bg,
+    OSWindow *w
+) {
     if (num_border_rects) {
         if (rect_data_is_dirty) {
+            // VAOにボーダー用のバッファを割り当てる
             size_t sz = sizeof(GLuint) * 5 * num_border_rects;
             void *borders_buf_address = alloc_and_map_vao_buffer(vao_idx, sz, 0, GL_STATIC_DRAW, GL_WRITE_ONLY);
             if (borders_buf_address) {
@@ -880,8 +1064,15 @@ draw_borders(ssize_t vao_idx,
             }
             unmap_vao_buffer(vao_idx, 0);
         }
+
+        // 枠線用GLプログラムをバインドする
         bind_program(BORDERS_PROGRAM);
-#define CV3(x) (((float)((x >> 16) & 0xff)) / 255.f), (((float)((x >> 8) & 0xff)) / 255.f), (((float)(x & 0xff)) / 255.f)
+
+#define CV3(x) \
+        (((float)((x >> 16) & 0xff)) / 255.f), \
+        (((float)((x >> 8) & 0xff)) / 255.f), \
+        (((float)(x & 0xff)) / 255.f)
+
         glUniform1f(border_uniform_locations[BORDER_background_opacity], w->is_semi_transparent ? w->background_opacity : 1.0f);
         glUniform3f(border_uniform_locations[BORDER_active_border_color], CV3(OPT(active_border_color)));
         glUniform3f(border_uniform_locations[BORDER_inactive_border_color], CV3(OPT(inactive_border_color)));
@@ -889,13 +1080,20 @@ draw_borders(ssize_t vao_idx,
         glUniform2ui(border_uniform_locations[BORDER_viewport], viewport_width, viewport_height);
         color_type default_bg = (num_visible_windows > 1 && !all_windows_have_same_bg) ? OPT(background) : active_window_bg;
         glUniform3f(border_uniform_locations[BORDER_default_bg], CV3(default_bg));
+
 #undef CV3
+
+        // 頂点配列のバインド
         bind_vertex_array(vao_idx);
+
+        // インスタンス化配列の描画
         glDrawArraysInstanced(GL_TRIANGLE_FAN, 0, 4, num_border_rects);
+
+        // 頂点とプログラムのバインドを解除する
         unbind_vertex_array();
         unbind_program();
     }
-} /* draw_borders */
+}
 
 // }}}
 

@@ -22,7 +22,7 @@
 #define MAX_NUM_EXTRA_GLYPHS     8u
 
 /**
- * TODO 何？
+ * キャンバス(ピクセルバッファ)に含まれるセルの数
  */
 #define CELLS_IN_CANVAS          ((MAX_NUM_EXTRA_GLYPHS + 1u) * 3u)
 
@@ -129,11 +129,13 @@ struct SpecialGlyphCache {
 };
 
 /**
- * GPUスプライト・トラッカー
+ * GPUスプライトの管理情報
  */
 typedef struct {
-    size_t max_y;   /** 最大y座標 */
-    unsigned int x, y, z, xnum, ynum;   /** 座標? */
+    size_t max_y;   /** y方向にテクスチャに配置可能なセルの個数 */
+    unsigned int x, y, z;   /** 最後にスプライトを配置した座標 */
+    unsigned int xnum;   /** x方向にテクスチャに配置可能なセルの個数 */
+    unsigned int ynum;  /** 1固定 */
 } GPUSpriteTracker;
 
 /**
@@ -150,8 +152,16 @@ static hb_feature_t hb_features[3] = {{0}};
 
 /**
  * 形状バッファ
+ *  と言いつつ、型は char_type なので、文字コードの配列でしかない。
+ *  文字コードは UTF32 。
+ *  さらに、load_hb_buffer 関数でしか使用してない。
+ *  スタックオーバーフロー避けたいんだろうけど、横着しないで malloc/free すれば
+ *  良いのに...
+ *
  *  何故にstaticなのか...
  *  何故に4096なのか...
+ *
+ * \see load_hb_buffer 関数でしか使用してない
  */
 static char_type shape_buffer[4096] = {0};
 
@@ -200,11 +210,34 @@ static size_t num_symbol_maps = 0;
  */
 typedef struct {
     PyObject *face;
-    // Map glyphs to sprite map co-ords
+
+    /**
+     * スプライト座標のマップ
+     *  キーはグリフインデックス
+     */
     SpritePosition sprite_map[1024];
+
+    /**
+     * HarfBuzz機能の配列
+     */
     hb_feature_t hb_features[8];
+
+    /**
+     * HarfBuzz機能の件数
+     */
     size_t num_hb_features;
+
+    /**
+     * 特殊グリフのキャッシュ
+     */
     SpecialGlyphCache special_glyph_cache[SPECIAL_GLYPH_CACHE_SIZE];
+
+    /**
+     * スタイル
+     * - ボールド
+     * - イタリック
+     * - 絵文字表現
+     */
     bool bold, italic, emoji_presentation;
 } Font;
 
@@ -219,6 +252,10 @@ typedef struct {
     ssize_t medium_font_idx, bold_font_idx, italic_font_idx, bi_font_idx, first_symbol_font_idx, first_fallback_font_idx;
     Font *fonts;
     pixel *canvas;
+
+    /**
+     * スプライトトラッカー
+     */
     GPUSpriteTracker sprite_tracker;
 } FontGroup;
 
@@ -402,7 +439,7 @@ sprite_map_set_error(int error) {
 }
 
 /**
- * スプライトトラッカーの制限値を設定する
+ * スプライト・トラッカーの制限値を設定する
  *
  * @param mts 最大テクスチャサイズ
  * @param mal 最大アレイ長
@@ -414,7 +451,8 @@ sprite_tracker_set_limits(size_t mts, size_t mal) {
 }
 
 /**
- * フォントグループのスプライトトラッカー情報を更新する
+ * スプライト・トラッカー情報を更新する
+ *  ファイルシステムのボリュームビットマップみたいなものか？
  *
  * @param fg フォントグループ
  * @param error エラー情報 [out]
@@ -423,13 +461,16 @@ static inline void
 do_increment(FontGroup *fg, int *error) {
     fg->sprite_tracker.x++;
     if (fg->sprite_tracker.x >= fg->sprite_tracker.xnum) {
+        // xが最大値に到達したら0にリセットしてyを増やし ynum も更新する
         fg->sprite_tracker.x = 0;
         fg->sprite_tracker.y++;
         fg->sprite_tracker.ynum = MIN(MAX(fg->sprite_tracker.ynum, fg->sprite_tracker.y + 1), fg->sprite_tracker.max_y);
         if (fg->sprite_tracker.y >= fg->sprite_tracker.max_y) {
+            // yが最大値に到達したら0にリセットして z を更新する
             fg->sprite_tracker.y = 0;
             fg->sprite_tracker.z++;
             if (fg->sprite_tracker.z >= MIN((size_t)UINT16_MAX, max_array_len)) {
+                // zの最大値に到達したらエラー
                 *error = 2;
             }
         }
@@ -457,7 +498,7 @@ extra_glyphs_equal(ExtraGlyphs *a, ExtraGlyphs *b) {
 }
 
 /**
- * スプライト位置の照合
+ * グリフに対するスプライト位置を探す
  *
  * @param fg フォントグループ
  * @param font フォント
@@ -478,7 +519,7 @@ sprite_position_for(
     int *error
 ) {
     // グリフインデックスはグリフ値そのものである
-    glyph_index idx = glyph & (SPECIAL_GLYPH_CACHE_SIZE - 1);
+    const glyph_index idx = glyph & (SPECIAL_GLYPH_CACHE_SIZE - 1);
 
     // グリフに対応するスプライトの位置を得る
     SpritePosition *sp = &font->sprite_map[idx];
@@ -490,11 +531,14 @@ sprite_position_for(
                sp->ligature_index == ligature_index)) {
         return sp; // キャッシュヒット
     }
+
+    // キャッシュにない場合はsp->nextを辿って線形探索する
     while (true) {
         if (sp->filled) {
             if (sp->glyph == glyph &&
-                extra_glyphs_equal(&sp->extra_glyphs, extra_glyphs) && sp->ligature_index == ligature_index) {
-                return sp; // キャッシュヒット
+                extra_glyphs_equal(&sp->extra_glyphs, extra_glyphs) &&
+                sp->ligature_index == ligature_index) {
+                return sp; // ヒット
             }
         }
         else {
@@ -510,7 +554,7 @@ sprite_position_for(
         sp = sp->next;
     }
 
-    // スプライト位置情報を構成する
+    // spは空のスロットを指しているのでスプライト位置情報を設定して返す
     sp->glyph = glyph;
     memcpy(&sp->extra_glyphs, extra_glyphs, sizeof(ExtraGlyphs));
     sp->ligature_index = ligature_index;
@@ -521,7 +565,7 @@ sprite_position_for(
     sp->y = fg->sprite_tracker.y;
     sp->z = fg->sprite_tracker.z;
 
-    // インクリメント
+    // スプライト・トラッカーを更新する
     do_increment(fg, error);
 
     return sp;
@@ -573,7 +617,7 @@ special_glyph_cache_for(Font *font, glyph_index glyph, uint8_t filled_mask) {
 /**
  * スプライト・トラッカーの現レイアウトを取得する
  *
- * @param data フォントデータハンドル
+ * @param data フォントグループ
  * @param x x座標 [out]
  * @param y y座標 [out]
  * @param z z座標 [out]
@@ -587,6 +631,32 @@ sprite_tracker_current_layout(FONTS_DATA_HANDLE data, unsigned int *x, unsigned 
     *z = fg->sprite_tracker.z;
 }
 
+static inline
+void free_sprite_positions(Font *font) {
+    for (size_t i = 0; i < sizeof(font->sprite_map) / sizeof(font->sprite_map[0]); i++) {
+        SpritePosition *s = font->sprite_map[i].next;
+        while (s) {
+            SpritePosition *t = s;
+            s = s->next;
+            free(t);
+        }
+    }
+    memset(font->sprite_map, 0, sizeof(font->sprite_map));
+}
+
+static inline
+void free_special_glyph_cache(Font *font) {
+    for (size_t i = 0; i < sizeof(font->special_glyph_cache) / sizeof(font->special_glyph_cache[0]); i++) {
+        SpecialGlyphCache *s = font->special_glyph_cache[i].next;
+        while (s) {
+            SpecialGlyphCache *t = s;
+            s = s->next;
+            free(t);
+        }
+    }
+    memset(font->special_glyph_cache, 0, sizeof(font->special_glyph_cache));
+}
+
 /**
  * マップ群を解放する
  *  - SpritePosition
@@ -596,58 +666,39 @@ sprite_tracker_current_layout(FONTS_DATA_HANDLE data, unsigned int *x, unsigned 
  */
 void
 free_maps(Font *font) {
-    // リンクリストを辿ってfreeしていく
-#define free_a_map(type, attr) { \
-        type *s, *t; \
-        for (size_t i = 0; i < sizeof(font->attr) / sizeof(font->attr[0]); i++) { \
-            s = font->attr[i].next; \
-            while (s) { \
-                t = s; \
-                s = s->next; \
-                free(t); \
-            } \
-        } \
-        memset(font->attr, 0, sizeof(font->attr)); \
+    free_sprite_positions(font);
+    free_special_glyph_cache(font);
 }
-    free_a_map(SpritePosition, sprite_map);
-    free_a_map(SpecialGlyphCache, special_glyph_cache);
-#undef free_a_map
+
+static inline
+void clear_sprite_position_impl(SpritePosition *sp) {
+    sp->filled = sp->rendered = sp->colored = false;
+    sp->glyph = 0;
+    zero_at_ptr(&sp->extra_glyphs);
+    sp->x = sp->y = sp->z = 0;
+    sp->ligature_index = 0;
 }
 
 /**
- * スプライトマップ(SpritePositionの配列)をクリアする
+ * スプライトの配列をクリアする
  *
- * @param font フォント
+ * \param font フォント
+ * \note これどこからも呼ばれてないって😠
  */
 void
 clear_sprite_map(Font *font) {
-#define CLEAR(s) \
-    s->filled = false; \
-    s->rendered = false; \
-    s->colored = false; \
-    s->glyph = 0; \
-    zero_at_ptr(&s->extra_glyphs); \
-    s->x = 0; \
-    s->y = 0; \
-    s->z = 0; \
-    s->ligature_index = 0;
-
-    SpritePosition *sp;
     for (size_t i = 0; i < sizeof(font->sprite_map) / sizeof(font->sprite_map[0]); i++) {
-        sp = &font->sprite_map[i];
-        CLEAR(sp);
-        while ((sp = sp->next)) {
-            CLEAR(sp);
+        for (SpritePosition *sp = &font->sprite_map[i]; sp != NULL; sp = sp->next) {
+            clear_sprite_position_impl(sp);
         }
     }
-
-#undef CLEAR
 }
 
 /**
  * 特殊グリフキャッシュをクリアする
  *
- * @param font フォント
+ * \param font フォント
+ * \note これどこからも呼ばれてないって😠
  */
 void
 clear_special_glyph_cache(Font *font) {
@@ -733,7 +784,7 @@ init_font(Font *f, PyObject *face, bool bold, bool italic, bool emoji_presentati
     f->emoji_presentation = emoji_presentation;
     f->num_hb_features = 0;
 
-    // Ninbus フォントは強制的にリガチャを有効にする
+    // Ninbus フォントであれば強制的にリガチャを有効にする
     const char *psname = postscript_name_for_face(face);
     if (strstr(psname, "NimbusMonoPS-") == psname) {
         copy_hb_feature(f, LIGA_FEATURE);
@@ -811,15 +862,16 @@ python_send_to_gpu(FONTS_DATA_HANDLE fg, unsigned int x, unsigned int y, unsigne
         if (num_font_groups == 0) {
             fatal("Cannot call send to gpu with no font groups");
         }
-        PyObject *ret =
-            PyObject_CallFunction(python_send_to_gpu_impl,
-                                  "IIIN",
-                                  x,
-                                  y,
-                                  z,
-                                  PyBytes_FromStringAndSize((const char *)buf,
-                                                            sizeof(pixel) * fg->cell_width * fg->cell_height));
-        if (ret == NULL) {
+        PyObject *ret = PyObject_CallFunction(
+            python_send_to_gpu_impl,
+            "IIIN",
+            x,
+            y,
+            z,
+            PyBytes_FromStringAndSize(
+                (const char *)buf,
+                sizeof(pixel) * fg->cell_width * fg->cell_height));
+        if (!ret) {
             PyErr_Print();
         }
         else {
@@ -835,9 +887,9 @@ python_send_to_gpu(FONTS_DATA_HANDLE fg, unsigned int x, unsigned int y, unsigne
  */
 static inline void
 calc_cell_metrics(FontGroup *fg) {
-    unsigned int cell_height, cell_width, baseline, underline_position, underline_thickness;
 
     // 関数一発呼ぶわ
+    unsigned int cell_height, cell_width, baseline, underline_position, underline_thickness;
     cell_metrics(fg->fonts[fg->medium_font_idx].face,
                  &cell_width,
                  &cell_height,
@@ -943,7 +995,10 @@ face_has_codepoint(PyObject *face, char_type cp) {
  *
  *  - GPUセル幅が2
  *  - CPUセル保持のコードポイントが絵文字領域のもの
- *  - CPUセルのcc_idx[0] が VS15 TODO VS15って何？unicode-data.hで定義されているけど 🤔
+ *  - CPUセルのcc_idx[0] が VS15 ではない
+ *      - VS15 は絵文字モノクロ表現
+ *      - なので、ここではカラー絵文字かどうか判定していると言う事
+ *      - むむむ、モノクロ絵文字は偽になるのか...
  *
  * @param cpu_cell CPUセル
  * @param gpu_cell GPUセル
@@ -968,12 +1023,12 @@ has_cell_text(Font *self, CPUCell *cell) {
     if (!face_has_codepoint(self->face, cell->ch)) {
         return false;
     }
-    for (unsigned i = 0; i < arraysz(cell->cc_idx) && cell->cc_idx[i]; i++) {
-        combining_type cc_idx = cell->cc_idx[i];
-        if (cc_idx == VS15 || cc_idx == VS16) { // 異体字セレクタならスキップ
+    for (unsigned i = 0; i < arraysz(cell->cc_idx) && cell->cc_idx[i] != 0; i++) {
+        const combining_type mark = cell->cc_idx[i];
+        if (mark == VS15 || mark == VS16) { // 絵文字の異体字セレクタならスキップ
             continue;
         }
-        if (!face_has_codepoint(self->face, codepoint_for_mark(cc_idx))) {
+        if (!face_has_codepoint(self->face, codepoint_for_mark(mark))) {
             return false;
         }
     }
@@ -1077,7 +1132,7 @@ load_fallback_font(FontGroup *fg, CPUCell *cell, bool bold, bool italic, bool em
         if (global_state.debug_font_fallback) {
             printf("The font chosen by the OS for the text: ");
             printf("U+%x ", cell->ch);
-            for (unsigned i = 0; i < arraysz(cell->cc_idx) && cell->cc_idx[i]; i++) {
+            for (unsigned i = 0; i < arraysz(cell->cc_idx) && cell->cc_idx[i] != 0; i++) {
                 printf("U+%x ", codepoint_for_mark(cell->cc_idx[i]));
             }
             printf("is ");
@@ -1358,38 +1413,51 @@ render_box_cell(FontGroup *fg, CPUCell *cpu_cell, GPUCell *gpu_cell) {
 /**
  * HarfBuzzをロードする
  *
- * @param cpu_cell CPUセルの配列
- * @param first_gpu_cell GPUセルの配列
- * @param num_cells セル数
+ * \param cpu_cell CPUセルの配列
+ * \param first_gpu_cell GPUセルの配列
+ * \param num_cells セル数
  */
 static inline void
 load_hb_buffer(CPUCell *cpu_cell, GPUCell *gpu_cell, index_type num_cells) {
-    index_type num;
-
+    // HarfBuzzバッファをクリアする
     hb_buffer_clear_contents(harfbuzz_buffer);
+
     while (num_cells != 0) {
         attrs_type prev_width = 0;
-        // shape_bufferに文字コードを埋めていく
+
+        // shape_bufferに文字コードポイントを埋めていく
+        index_type num;
         for (num = 0;
-             num_cells && num < arraysz(shape_buffer) - 20 - arraysz(cpu_cell->cc_idx);
+             num_cells != 0 && num < arraysz(shape_buffer) - 20 - arraysz(cpu_cell->cc_idx); // TODO 20って何？
              cpu_cell++, gpu_cell++, num_cells--) {
+
+            // 直前の文字幅が2なら shape_buffer に入れない
             if (prev_width == 2) {
                 prev_width = 0;
                 continue;
             }
+
+            // shape_buffer にコードポイントを詰める
             shape_buffer[num++] = cpu_cell->ch;
+
+            // 文字幅を保持しておく
             prev_width = gpu_cell->attrs & WIDTH_MASK;
+
+            // 結合文字も shape_buffer にいれる
+            // - cc_idxには内部インデックスで格納されている
+            // - なのでコードポイントに変換してからいれる
             for (unsigned int i = 0; i < arraysz(cpu_cell->cc_idx) && cpu_cell->cc_idx[i]; i++) {
-                shape_buffer[num++] = codepoint_for_mark(cpu_cell->cc_idx[i]);
+                const combining_type mark = cpu_cell->cc_idx[i];
+                shape_buffer[num++] = codepoint_for_mark(mark);
             }
         }
 
-        // HarfBuzzバッファ内の無効なUTF-32文字を shape_buffer で置き換えます
+        // HarfBuzzバッファをまるっと shape_buffer で置換する
         hb_buffer_add_utf32(harfbuzz_buffer, shape_buffer, num, 0, num);
     }
 
-    // バッファーのUnicode内容に基づいて、未設定のバッファーセグメントプロパテ
-    // ィを設定します
+    // バッファのUnicode内容に基づいて、未設定のバッファーセグメントプロパテ
+    // ィを設定する
     hb_buffer_guess_segment_properties(harfbuzz_buffer);
 }
 
@@ -1420,15 +1488,15 @@ set_cell_sprite(GPUCell *cell, SpritePosition *sp) {
 static inline pixel *
 extract_cell_from_canvas(FontGroup *fg, unsigned int i, unsigned int num_cells) {
     // キャンバス配列の末尾に展開する
-    pixel *ans = fg->canvas + (fg->cell_width * fg->cell_height * (CELLS_IN_CANVAS - 1));
-    pixel *dest = ans;
-    pixel *src = fg->canvas + (i * fg->cell_width);
+    pixel *tail = &fg->canvas[fg->cell_width * fg->cell_height * (CELLS_IN_CANVAS - 1)];
+    pixel *dest = tail;
+    const pixel *src = &fg->canvas[i * fg->cell_width];
     const unsigned int stride = fg->cell_width * num_cells;
 
     for (unsigned int y = 0; y < fg->cell_height; y++, dest += fg->cell_width, src += stride) {
         memcpy(dest, src, fg->cell_width * sizeof(pixel));
     }
-    return ans;
+    return tail;
 }
 
 /**
@@ -1482,14 +1550,17 @@ render_group(
         return;
     }
 
-    // キャンバスのクリア
+    // キャンバスの(ゼロ)クリア
     clear_canvas(fg);
+
+    // 絵文字の判定
+    bool was_colored = (gpu_cells->attrs & WIDTH_MASK) == 2 && is_emoji(cpu_cells->ch);
 
     /*
      * グリフをレンダリングする
      *  freetype/CoreText各々の実装に分岐する
+     *  出力結果はビットマップとして fg->canvas に格納される
      */
-    bool was_colored = (gpu_cells->attrs & WIDTH_MASK) == 2 && is_emoji(cpu_cells->ch);
     render_glyphs_in_cells(font->face,
                            font->bold,
                            font->italic,
@@ -1513,7 +1584,13 @@ render_group(
         sprite_position[i]->rendered = true;
         sprite_position[i]->colored = was_colored;
         set_cell_sprite(gpu_cells + i, sprite_position[i]);
-        pixel *buf = num_cells == 1 ? fg->canvas : extract_cell_from_canvas(fg, i, num_cells);
+
+        // セルがn個の場合はcanvasを展開する(なんで？)
+        pixel *buf = num_cells == 1 ?
+            fg->canvas :
+            extract_cell_from_canvas(fg, i, num_cells);
+
+        // スプライトをGPUに転送する
         current_send_sprite_to_gpu((FONTS_DATA_HANDLE)fg,
                                    sprite_position[i]->x,
                                    sprite_position[i]->y,
@@ -1564,7 +1641,14 @@ typedef struct {
             *last_cpu_cell;
     GPUCell *first_gpu_cell,
             *last_gpu_cell;
+    /**
+     * HarfBuzzグリフ情報
+     */
     hb_glyph_info_t *info;
+
+    /**
+     * HarfBuzz位置情報
+     */
     hb_glyph_position_t *positions;
 } GroupState;
 
@@ -1575,16 +1659,18 @@ typedef struct {
 static GroupState group_state = {0};
 
 /**
- * セル中のコードポイントの数を数える
+ * セル中のコードポイントを数える
+ *
+ * \param[in] cell CPUセル
+ * \return コードポイントの個数
  */
 static inline unsigned int
 num_codepoints_in_cell(CPUCell *cell) {
-    unsigned int ans = 1;
-
-    for (unsigned i = 0; i < arraysz(cell->cc_idx) && cell->cc_idx[i]; i++) {
-        ans++;
+    unsigned n = 1; // `ch` メンバがあるので無条件に+1
+    for (unsigned i = 0; i < arraysz(cell->cc_idx) && cell->cc_idx[i] != 0; i++) {
+        n++;
     }
-    return ans;
+    return n;
 }
 
 /**
@@ -1592,12 +1678,12 @@ num_codepoints_in_cell(CPUCell *cell) {
  *
  * HarfBuzz用語では `shaping` というため、この関数名になっている模様。
  *
- * @param first_cpu_cell 先頭CPUセル
- * @param first_gpu_cell 先頭GPUセル
- * @param num_cells セルの個数
- * @param font HarfBuzzフォント
- * @param fobj フォント
- * @param disable_ligature リガチャ無効
+ * \param first_cpu_cell 先頭CPUセル
+ * \param first_gpu_cell 先頭GPUセル
+ * \param num_cells セルの個数
+ * \param font HarfBuzzフォント
+ * \param fobj フォント
+ * \param disable_ligature リガチャ無効
  */
 static inline void
 shape(
@@ -1636,7 +1722,7 @@ shape(
     group_state.last_cpu_cell = first_cpu_cell + (num_cells ? num_cells - 1 : 0);
     group_state.last_gpu_cell = first_gpu_cell + (num_cells ? num_cells - 1 : 0);
 
-    // HarfBuzzバッファのロード
+    // HarfBuzzバッファのロード - staticな `harfbuzz_buffer` にCPUセルの文字コードが埋められる
     load_hb_buffer(first_cpu_cell, first_gpu_cell, num_cells);
 
     // レイアウトする
@@ -1709,24 +1795,34 @@ is_empty_glyph(glyph_index glyph_id, Font *font) {
 /**
  * コードポイントを消費して、必要ならスロットを空ける
  *
- * @param cell_data セルデータ
- * @param last_cpu_cell 最後のCPUセル
- * @return スロットを増やした数
+ * \param cell_data セルデータ
+ * \param last_cpu_cell 最後のCPUセル
+ * \return スロットを増やした数
  */
 static inline unsigned int
 check_cell_consumed(CellData *cell_data, CPUCell *last_cpu_cell) {
+
     // コードポイントを消費する
     cell_data->codepoints_consumed++;
+
     if (cell_data->codepoints_consumed >= cell_data->num_codepoints) {
-        // CPUセルとGPUセルのスロットを増やす
-        attrs_type width = cell_data->gpu_cell->attrs & WIDTH_MASK;
+
+        // 文字幅を得る
+        const attrs_type width = cell_data->gpu_cell->attrs & WIDTH_MASK;
+
+        // CPU/GPUセル(配列)のスロットを増やす
         cell_data->cpu_cell += MAX(1, width);
         cell_data->gpu_cell += MAX(1, width);
+
         // 消費カウンタをクリアする
         cell_data->codepoints_consumed = 0;
+
         if (cell_data->cpu_cell <= last_cpu_cell) {
-            // コードポイントの数(TODO って何の数?)を数え上げる
+
+            // コードポイントを数え上げる
             cell_data->num_codepoints = num_codepoints_in_cell(cell_data->cpu_cell);
+
+            // カレントのコードポイントを設定する
             cell_data->current_codepoint = cell_data->cpu_cell->ch;
         }
         else {
@@ -1740,8 +1836,9 @@ check_cell_consumed(CellData *cell_data, CPUCell *last_cpu_cell) {
                 cell_data->current_codepoint = cell_data->cpu_cell->ch;
                 break;
             default: {
-                index_type mark = cell_data->cpu_cell->cc_idx[cell_data->codepoints_consumed - 1];
-                // VS15/16は、特殊なグリフとしてマークされており、レンダリング
+                // 結合記号のマーク(インデックス値)を得る
+                const index_type mark = cell_data->cpu_cell->cc_idx[cell_data->codepoints_consumed - 1];
+                // VS15/16(絵文字の異体字セレクタ)は、特殊なグリフとしてマークされており、レンダリング
                 // を中断させるため、0にマップして、それを回避します
                 cell_data->current_codepoint =
                     (mark == VS15 || mark == VS16) ? 0 : codepoint_for_mark(mark);
@@ -2389,7 +2486,11 @@ send_prerendered_sprites(FontGroup *fg) {
 
     // ブランクセル
     clear_canvas(fg);
+
+    // スプライトをGPUに転送
     current_send_sprite_to_gpu((FONTS_DATA_HANDLE)fg, x, y, z, fg->canvas);
+
+    // スプライト・トラッカーを更新する
     do_increment(fg, &error);
     if (error != 0) {
         sprite_map_set_error(error);
@@ -2420,12 +2521,15 @@ send_prerendered_sprites(FontGroup *fg) {
         if (y > 0) {
             fatal("Too many pre-rendered sprites for your GPU or the font size is too large");
         }
+
+        // スプライト・トラッカーを更新する
         do_increment(fg, &error);
         if (error != 0) {
             sprite_map_set_error(error);
             PyErr_Print();
             fatal("Failed");
         }
+
         uint8_t *alpha_mask = PyLong_AsVoidPtr(PyTuple_GET_ITEM(args, i));
         clear_canvas(fg);
         Region region = {
@@ -2767,11 +2871,11 @@ current_fonts(PYNOARG) {
 }
 
 /**
- * フォールバックフォントを取得する(Pythonモジュール)
+ * フォールバックフォントを取得する - Pythonモジュール
  *
- * @param self 未使用
- * @param args 引数
- * @return CTFaceオブジェクト
+ * \param[in] self 未使用
+ * \param[in] args 引数
+ * \return CTFaceオブジェクト
  */
 static PyObject *
 get_fallback_font(PyObject UNUSED *self, PyObject *args) {
@@ -2787,14 +2891,29 @@ get_fallback_font(PyObject UNUSED *self, PyObject *args) {
         return NULL;
     }
 
-    // テキストからUCS4文字を得てCPUセルに詰める
+    // テキストからCPUセルとGPUセルを作成する
+    // フォールバックフォントを得るためだけに一時的に確保する
     CPUCell cpu_cell = {0};
     GPUCell gpu_cell = {0};
     static Py_UCS4 char_buf[2 + arraysz(cpu_cell.cc_idx)];
     if (!PyUnicode_AsUCS4(text, char_buf, arraysz(char_buf), 1)) {
         return NULL;
     }
+
+    // CPUセルの `.ch` にコードポイントを格納する
     cpu_cell.ch = char_buf[0];
+
+    // CPUセルの `.cc_idx[]` に結合文字の記号（異体字セレクタ）を入れる
+    //
+    // - 結合記号でなければ cc_idx には 0 が入る
+    //  - mark_for_codepoint関数の仕様上、0が返って来るので
+    // - 結合記号であれば、マーク(内部的なインデックス値)に変換して cc_idx に入
+    //   れる
+    //
+    // NOTE: 結合文字表現は [基底文字のコードポイント][結合記号][結合記号] ...
+    // となる。結合記号には、ダイアクリティカルマークや囲み記号、異体字セレクタ
+    // などが用いられる。
+    //
     for (unsigned i = 0; i + 1 < (unsigned)PyUnicode_GetLength(text) && i < arraysz(cpu_cell.cc_idx); i++) {
         cpu_cell.cc_idx[i] = mark_for_codepoint(char_buf[i + 1]);
     }

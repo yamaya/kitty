@@ -125,7 +125,7 @@ dealloc(GraphicsManager *self) {
 }
 
 /**
- * 何故にstatic...
+ * 画像の内部ID
  */
 static id_type internal_id_counter = 1;
 
@@ -472,9 +472,9 @@ find_or_create_image(GraphicsManager *self, uint32_t id, bool *existing) {
     // 画像を作る
     *existing = false;
     ensure_space_for(self, images, Image, self->image_count + 1, images_capacity, 64, true);
-    Image *ans = self->images + self->image_count++;
-    zero_at_ptr(ans);
-    return ans;
+    Image *p = self->images + self->image_count++;
+    zero_at_ptr(p);
+    return p;
 }
 
 /**
@@ -484,7 +484,7 @@ find_or_create_image(GraphicsManager *self, uint32_t id, bool *existing) {
  * @param g GraphicsCommandオブジェクト
  * @param payload ペイロード
  * @param is_dirty 状態変化があるか
- * @param iid 内部ID?
+ * @param iid クライアントID
  * @return 画像オブジェクト
  */
 static Image *
@@ -493,13 +493,12 @@ handle_add_command(GraphicsManager *self, const GraphicsCommand *g, const uint8_
     set_add_response(#code, __VA_ARGS__); \
     self->loading_image = 0; \
     if (img) \
-    img->data_loaded = false; \
+        img->data_loaded = false; \
     return NULL; \
 }
 #define MAX_DATA_SZ (4u * 100000000u)
 
     has_add_respose = false;
-    bool existing, init_img = true;
     Image *img = NULL;
     // 転送タイプ: direct, file, shared memory... etc
     unsigned char transmission = g->transmission_type ? g->transmission_type : 'd';
@@ -508,10 +507,12 @@ handle_add_command(GraphicsManager *self, const GraphicsCommand *g, const uint8_
         RGBA = 32,
         PNG  = 100
     };
+    bool init_img = true;
     uint32_t fmt = g->format ? g->format : RGBA;
     if (transmission == 'd' && self->loading_image) {
         init_img = false;
     }
+
     if (init_img) {
         self->last_init_graphics_command = *g;
         self->last_init_graphics_command.id = iid;
@@ -520,8 +521,12 @@ handle_add_command(GraphicsManager *self, const GraphicsCommand *g, const uint8_
             ABRT(EINVAL, "Image too large");
         }
         remove_images(self, add_trim_predicate, 0);
+
+        // 画像を用意する
+        bool existing;
         img = find_or_create_image(self, iid, &existing);
         if (existing) {
+            // 既存の画像であれば内容をクリアして再利用する
             free_load_data(&img->load_data);
             img->data_loaded = false;
             free_refs_data(img);
@@ -533,9 +538,10 @@ handle_add_command(GraphicsManager *self, const GraphicsCommand *g, const uint8_
             img->client_id = iid;
         }
         img->atime = monotonic();
-        img->used_storage = 0;
-        img->width = g->data_width;
+        img->used_storage = 0; // 中身はない
+        img->width = g->data_width; // サイズは設定する
         img->height = g->data_height;
+
         switch (fmt) {
         case PNG:
             if (g->data_sz > MAX_DATA_SZ) {
@@ -896,11 +902,11 @@ handle_put_command(GraphicsManager *self, const GraphicsCommand *g, Cursor *c, b
 static int
 cmp_by_zindex_and_image(const void *a_, const void *b_) {
     const ImageRenderData *a = (const ImageRenderData *)a_, *b = (const ImageRenderData *)b_;
-    int ans = a->z_index - b->z_index;
-    if (ans == 0) {
-        ans = a->image_id - b->image_id;
+    int v = a->z_index - b->z_index;
+    if (v == 0) {
+        v = a->image_id - b->image_id;
     }
-    return ans;
+    return v;
 }
 
 /**
@@ -999,12 +1005,8 @@ grman_update_layers(
         return false;
     }
     self->layers_dirty = false;
-    size_t i, j;
     self->num_of_negative_refs = 0;
     self->num_of_positive_refs = 0;
-    Image *img;
-    ImageRef *ref;
-    ImageRect r;
     float screen_width = dx * num_cols, screen_height = dy * num_rows;
     float screen_bottom = screen_top - screen_height;
     float screen_width_px = num_cols * cell.width;
@@ -1013,10 +1015,13 @@ grman_update_layers(
 
     // 表示されているすべての参照を反復処理し、レンダリングデータを作成します
     self->count = 0;
-    for (i = 0; i < self->image_count; i++) {
-        img = &self->images[i];
-        for (j = 0; j < img->refcnt; j++) {
-            ref = &img->refs[j];
+    for (size_t i = 0; i < self->image_count; i++) {
+        Image *image = &self->images[i];
+        for (size_t j = 0; j < image->refcnt; j++) {
+            ImageRef *ref = &image->refs[j];
+
+            // 画像の矩形の計算を延々と行う
+            ImageRect r;
             r.top = y0 - ref->start_row * dy - dy * (float)ref->cell_y_offset / (float)cell.height;
             if (ref->num_rows > 0) {
                 r.bottom = y0 - (ref->start_row + (int32_t)ref->num_rows) * dy;
@@ -1035,6 +1040,7 @@ grman_update_layers(
                 r.right = r.left + screen_width * (float)ref->src_width / screen_width_px;
             }
 
+            // z_index の正負を数え上げる
             if (ref->z_index < 0) {
                 self->num_of_negative_refs++;
             }
@@ -1042,15 +1048,15 @@ grman_update_layers(
                 self->num_of_positive_refs++;
             }
 
-            // 画像レンダリングデータを確保する
+            // 画像レンダリングデータを構築する
             ensure_space_for(self, render_data, ImageRenderData, self->count + 1, capacity, 64, true);
             ImageRenderData *rd = &self->render_data[self->count];
             zero_at_ptr(rd);
             set_vertex_data(rd, ref, &r);
             self->count++;
             rd->z_index = ref->z_index;
-            rd->image_id = img->internal_id;
-            rd->texture_id = img->texture_id;
+            rd->image_id = image->internal_id;
+            rd->texture_id = image->texture_id;
         }
     }
     if (self->count == 0) {
@@ -1061,7 +1067,7 @@ grman_update_layers(
     qsort(self->render_data, self->count, sizeof(self->render_data[0]), cmp_by_zindex_and_image);
 
     // グループを数え上げる
-    i = 0;
+    size_t i = 0;
     while (i < self->count) {
         id_type image_id = self->render_data[i].image_id, start = i;
         if (start == self->count - 1) {

@@ -30,11 +30,15 @@ extern PyTypeObject Screen_Type;
 
 #define EXTRA_FDS         2
 #ifndef MSG_NOSIGNAL
-// Apple does not implement MSG_NOSIGNAL
+// Apple は MSG_NOSIGNAL を実装していない
 #define MSG_NOSIGNAL      0
 #endif
+
 #define USE_RENDER_FRAMES (global_state.has_render_frames && OPT(sync_to_monitor))
 
+/**
+ * 解析関数
+ */
 static void (*parse_func)(Screen *, PyObject *, monotonic_t);
 
 typedef struct {
@@ -114,6 +118,14 @@ set_maximum_wait(monotonic_t val) {
     }
 }
 
+/**
+ * ChildMonitorオブジェクトのコンストラクタ
+ *
+ * \param[in] type ？
+ * \param[in] args コンストラクタ引数
+ * \param[in] kwds 未使用
+ * \return ChildMonitorオブジェクト
+ */
 static PyObject *
 new(PyTypeObject *type, PyObject *args, PyObject UNUSED *kwds) {
     ChildMonitor *self;
@@ -146,6 +158,8 @@ new(PyTypeObject *type, PyObject *args, PyObject UNUSED *kwds) {
     }
     self->death_notify = death_notify;
     Py_INCREF(death_notify);
+
+    // parse_funcを設定する
     if (dump_callback != Py_None) {
         self->dump_callback = dump_callback;
         Py_INCREF(dump_callback);
@@ -154,6 +168,7 @@ new(PyTypeObject *type, PyObject *args, PyObject UNUSED *kwds) {
     else {
         parse_func = parse_worker;
     }
+
     self->count = 0;
     fds[0].fd = self->io_loop_data.wakeup_read_fd;
     fds[1].fd = self->io_loop_data.signal_read_fd;
@@ -334,15 +349,25 @@ shutdown_monitor(ChildMonitor *self, PyObject *a UNUSED) {
     Py_RETURN_NONE;
 }
 
+/**
+ * 入力の解析(下請け処理)
+ *
+ * \param[in] self 子モニター
+ * \param[in] screen スクリーン
+ * \param[in] now 現在時刻
+ * \return 入力があるかどうか
+ */
 static inline bool
 do_parse(ChildMonitor *self, Screen *screen, monotonic_t now) {
     bool input_read = false;
 
+    // ミューテックスロック
     screen_mutex(lock, read);
+
     if (screen->read_buf_sz || screen->pending_mode.used) {
-        monotonic_t time_since_new_input = now - screen->new_input_at;
+        const monotonic_t time_since_new_input = now - screen->new_input_at;
         if (time_since_new_input >= OPT(input_delay)) {
-            bool read_buf_full = screen->read_buf_sz >= READ_BUF_SZ;
+            const bool read_buf_full = screen->read_buf_sz >= READ_BUF_SZ;
             input_read = true;
             parse_func(screen, self->dump_callback, now);
             if (read_buf_full) {
@@ -358,20 +383,31 @@ do_parse(ChildMonitor *self, Screen *screen, monotonic_t now) {
             set_maximum_wait(OPT(input_delay) - time_since_new_input);
         }
     }
-    screen_mutex(unlock, read);
-    return input_read;
-} /* do_parse */
 
+    // ミューテックスロック解除
+    screen_mutex(unlock, read);
+
+    return input_read;
+}
+
+/**
+ * 入力の解析
+ *  I/Oスレッドで読み取られたすべての使用可能な入力を解析します。
+ *
+ * \param[in] self 子モニター
+ * \return 入力があるかどうか
+ */
 static bool
 parse_input(ChildMonitor *self) {
-    // Parse all available input that was read in the I/O thread.
     size_t count = 0, remove_count = 0;
     bool input_read = false;
     monotonic_t now = monotonic();
     PyObject *msg = NULL;
 
+    // ミューテックスロック
     children_mutex(lock);
-    while (remove_queue_count) {
+
+    while (remove_queue_count != 0) {
         remove_queue_count--;
         remove_notify[remove_count] = remove_queue[remove_queue_count].id;
         remove_count++;
@@ -395,6 +431,7 @@ parse_input(ChildMonitor *self) {
         }
     }
 
+    // KILLシグナルを受けた場合はアプリケーション終了へ
     if (UNLIKELY(kill_signal_received)) {
         global_state.terminate = true;
     }
@@ -405,7 +442,10 @@ parse_input(ChildMonitor *self) {
             INCREF_CHILD(scratch[i]);
         }
     }
+
+    // ミューテックス・ロック解除
     children_mutex(unlock);
+
     if (msg) {
         for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(msg); i++) {
             PyObject *resp =
@@ -426,12 +466,12 @@ parse_input(ChildMonitor *self) {
         Py_CLEAR(msg);
     }
 
-    while (remove_count) {
-        // must be done while no locks are held, since the locks are non-recursive and
-        // the python function could call into other functions in this module
+    while (remove_count != 0) {
+        // ロックは非再帰的であり、Python関数はこのモジュールの他の関数を呼び出
+        // すことができるので、ロックが保持されていない間に実行する必要がある
         remove_count--;
         PyObject *t = PyObject_CallFunction(self->death_notify, "k", remove_notify[remove_count]);
-        if (t == NULL) {
+        if (!t) {
             PyErr_Print();
         }
         else {
@@ -448,7 +488,7 @@ parse_input(ChildMonitor *self) {
         DECREF_CHILD(scratch[i]);
     }
     return input_read;
-} /* parse_input */
+}
 
 static inline void
 mark_child_for_close(ChildMonitor *self, id_type window_id) {
@@ -648,12 +688,12 @@ update_window_title(Window *w, OSWindow *os_window) {
  */
 static inline bool
 prepare_to_render_os_window(
-        OSWindow *os_window,
-        monotonic_t now,
-        unsigned int *active_window_id,
-        color_type *active_window_bg,
-        unsigned int *num_visible_windows,
-        bool *all_windows_have_same_bg
+    OSWindow *os_window,
+    monotonic_t now,
+    unsigned int *active_window_id,
+    color_type *active_window_bg,
+    unsigned int *num_visible_windows,
+    bool *all_windows_have_same_bg
 ) {
 
 #define TD os_window->tab_bar_render_data
@@ -687,6 +727,7 @@ prepare_to_render_os_window(
     for (unsigned int i = 0; i < tab->num_windows; i++) {
         Window *w = tab->windows + i;
 
+// 迂闊にローカル変数名変えられないなぁ
 #define WD w->render_data
 
         if (w->visible && WD.screen) {
@@ -743,25 +784,47 @@ prepare_to_render_os_window(
     return needs_render;
 }
 
+/**
+ * OSウインドウをレンダリングする
+ *
+ *  すべてのピクセルがすべてのバッファで少なくとも1回は背景色でクリアされるよう
+ *  にします
+ *
+ * \param[in] os_window OSウィンドウ
+ * \param[in] now 時刻
+ * \param[in] active_window_id アクティなウィンドウのID
+ * \param[in] active_window_bg アクティブなウィンドウの背景色
+ * \param[in] num_visible_windows 可視状態のウィンドウの数
+ * \param[in] all_windows_have_same_bg 全てのウィンドウは同一の背景色か否か
+ */
 static inline void
-render_os_window(OSWindow *os_window,
-                 monotonic_t now,
-                 unsigned int active_window_id,
-                 color_type active_window_bg,
-                 unsigned int num_visible_windows,
-                 bool all_windows_have_same_bg) {
-    // ensure all pixels are cleared to background color at least once in every buffer
+render_os_window(
+    OSWindow *os_window,
+    monotonic_t now,
+    unsigned int active_window_id,
+    color_type active_window_bg,
+    unsigned int num_visible_windows,
+    bool all_windows_have_same_bg
+) {
     if (os_window->clear_count++ < 3) {
         blank_os_window(os_window);
     }
-    Tab *tab = os_window->tabs + os_window->active_tab;
+    Tab *tab = &os_window->tabs[os_window->active_tab];
     BorderRects *br = &tab->border_rects;
-    bool static_live_resize_in_progress = os_window->live_resize.in_progress && OPT(resize_draw_strategy) == RESIZE_DRAW_STATIC;
+
+    // static描画なライブリサイズ中かどうか
+    const bool static_live_resize_in_progress =
+        os_window->live_resize.in_progress &&
+        OPT(resize_draw_strategy) == RESIZE_DRAW_STATIC;
+
+    // static描画なライブリサイズ中の場合は、スケール比率を算出しておく
     float x_ratio = 1, y_ratio = 1;
     if (static_live_resize_in_progress) {
         x_ratio = (float)os_window->viewport_width / (float)os_window->live_resize.width;
         y_ratio = (float)os_window->viewport_height / (float)os_window->live_resize.height;
     }
+
+    // static描画なライブリサイズ中ではない場合は枠線を描画する
     if (!static_live_resize_in_progress) {
         draw_borders(br->vao_idx,
                      br->num_border_rects,
@@ -775,13 +838,25 @@ render_os_window(OSWindow *os_window,
                      os_window);
         br->is_dirty = false;
     }
+
+    // タブバーの再描画
     if (TD.screen && os_window->num_tabs >= OPT(tab_bar_min_tabs)) {
-        draw_cells(TD.vao_idx, 0, TD.xstart, TD.ystart, TD.dx * x_ratio, TD.dy * y_ratio, TD.screen, os_window, true, false);
+        draw_cells(TD.vao_idx,
+                   0,
+                   TD.xstart,
+                   TD.ystart,
+                   TD.dx * x_ratio,
+                   TD.dy * y_ratio,
+                   TD.screen,
+                   os_window,
+                   true,
+                   false); // shaders.c
     }
+
+    // 全てのタブに紐づくウィンドウを再描画する
     for (unsigned int i = 0; i < tab->num_windows; i++) {
-        Window *w = tab->windows + i;
+        Window *w = &tab->windows[i];
         if (w->visible && WD.screen) {
-            bool is_active_window = i == tab->active_window;
             draw_cells(WD.vao_idx,
                        WD.gvao_idx,
                        WD.xstart,
@@ -790,10 +865,11 @@ render_os_window(OSWindow *os_window,
                        WD.dy * y_ratio,
                        WD.screen,
                        os_window,
-                       is_active_window,
-                       true);
+                       i == tab->active_window,
+                       true); // shaders.c
             if (WD.screen->start_visual_bell_at != 0) {
-                monotonic_t bell_left = OPT(visual_bell_duration) - (now - WD.screen->start_visual_bell_at);
+                const monotonic_t bell_left = OPT(visual_bell_duration) -
+                                              (now - WD.screen->start_visual_bell_at);
                 set_maximum_wait(bell_left);
             }
             w->cursor_visible_at_last_render = WD.screen->cursor_render_info.is_visible;
@@ -802,7 +878,10 @@ render_os_window(OSWindow *os_window,
             w->last_cursor_shape = WD.screen->cursor_render_info.shape;
         }
     }
+
+    // ウィンドウバッファのスワップ
     swap_window_buffers(os_window);
+
     os_window->last_active_tab = os_window->active_tab;
     os_window->last_num_tabs = os_window->num_tabs;
     os_window->last_active_window_id = active_window_id;
@@ -811,9 +890,10 @@ render_os_window(OSWindow *os_window,
     if (USE_RENDER_FRAMES) {
         request_frame_render(os_window);
     }
+
 #undef WD
 #undef TD
-} /* render_os_window */
+}
 
 static inline void
 update_os_window_title(OSWindow *os_window) {
@@ -850,19 +930,31 @@ no_render_frame_received_recently(OSWindow *w, monotonic_t now, monotonic_t max_
     return ans;
 }
 
+/**
+ * レンダリングする
+ *
+ * \param[in] now 時刻
+ * \param[in] input_read 入力読み込み中
+ */
 static inline void
 render(monotonic_t now, bool input_read) {
     EVDBG("input_read: %d", input_read);
     static monotonic_t last_render_at = MONOTONIC_T_MIN;
-    monotonic_t time_since_last_render = last_render_at == MONOTONIC_T_MIN ? OPT(repaint_delay) : now - last_render_at;
+
+    // `repaint_delay` 以内であればリターン
+    const monotonic_t time_since_last_render =
+        last_render_at == MONOTONIC_T_MIN ? OPT(repaint_delay) : now - last_render_at;
     if (!input_read && time_since_last_render < OPT(repaint_delay)) {
         set_maximum_wait(OPT(repaint_delay) - time_since_last_render);
         return;
     }
 
+    // OSウィンドウを辿る
     for (size_t i = 0; i < global_state.num_os_windows; i++) {
+
+        // ウィンドウがレンダリングすべきかどうか調べる
         OSWindow *w = global_state.os_windows + i;
-        if (!w->num_tabs) {
+        if (w->num_tabs == 0) {
             continue;
         }
         if (!should_os_window_be_rendered(w)) {
@@ -876,13 +968,20 @@ render(monotonic_t now, bool input_read) {
             }
             continue;
         }
+        
+        // コンテキストを作成する
         make_os_window_context_current(w);
+
+        // ライブリサイズ対応
         if (w->live_resize.in_progress && OPT(resize_draw_strategy) >= RESIZE_DRAW_BLANK) {
             blank_os_window(w);
             if (OPT(resize_draw_strategy) == RESIZE_DRAW_SIZE) {
                 draw_resizing_text(w);
             }
+
+            // ウィンドウバッファ群をスワップする
             swap_window_buffers(w);
+
             if (USE_RENDER_FRAMES) {
                 request_frame_render(w);
             }
@@ -891,35 +990,57 @@ render(monotonic_t now, bool input_read) {
         if (w->live_resize.in_progress && OPT(resize_draw_strategy) == RESIZE_DRAW_STATIC) {
             blank_os_window(w);
         }
+
+        // さらにレンダリングすべきかどうか調べる
         bool needs_render = w->is_damaged || w->live_resize.in_progress;
         if (w->viewport_size_dirty) {
+            // ビューポートサイズが変わっていたらサーフェイスサイズを更新してレンダリングへ
             w->clear_count = 0;
             update_surface_size(w->viewport_width, w->viewport_height, w->offscreen_texture_id);
             w->viewport_size_dirty = false;
             needs_render = true;
         }
         unsigned int active_window_id = 0, num_visible_windows = 0;
-        bool all_windows_have_same_bg;
+        bool all_windows_have_same_bg; // unused
         color_type active_window_bg = 0;
         if (!w->fonts_data) {
             log_error("No fonts data found for window id: %llu", w->id);
             continue;
         }
-        if (prepare_to_render_os_window(w, now, &active_window_id, &active_window_bg, &num_visible_windows,
-                                        &all_windows_have_same_bg)) {
+
+        // レンダリングの用意をする
+        if (prepare_to_render_os_window(
+                    w,
+                    now,
+                    &active_window_id,
+                    &active_window_bg,
+                    &num_visible_windows,
+                    &all_windows_have_same_bg)) {
             needs_render = true;
         }
-        if (w->last_active_window_id != active_window_id || w->last_active_tab != w->active_tab ||
+
+        // アクティブなウィンドウやタブが切り替わっていたらレンダリングへ
+        if (w->last_active_window_id != active_window_id ||
+            w->last_active_tab != w->active_tab ||
             w->focused_at_last_render != w->is_focused) {
             needs_render = true;
         }
+
+        // OSウィンドウをレンダリングする
         if (needs_render) {
-            render_os_window(w, now, active_window_id, active_window_bg, num_visible_windows, all_windows_have_same_bg);
+            render_os_window(
+                    w,
+                    now,
+                    active_window_id,
+                    active_window_bg,
+                    num_visible_windows,
+                    all_windows_have_same_bg);
         }
     }
+
+    // レンダリング時刻を更新する
     last_render_at = now;
-#undef TD
-} /* render */
+}
 
 typedef struct {int fd;
                 uint8_t *buf;
@@ -1095,6 +1216,11 @@ remove_python_timer(PyObject *self UNUSED, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+/**
+ * 保留中のリサイズを処理する
+ *
+ * \param[in] now 時刻
+ */
 static inline void
 process_pending_resizes(monotonic_t now) {
     global_state.has_pending_resizes = false;
@@ -1109,9 +1235,11 @@ process_pending_resizes(monotonic_t now) {
             }
             else {
                 monotonic_t debounce_time = OPT(resize_debounce_time);
-                // if more than one resize event has occurred, wait at least 0.2 secs
-                // before repainting, to avoid rapid transitions between the cells banner
-                // and the normal screen
+                /*
+                 * 複数のサイズ変更イベントが発生した場合、再描画する前に少なく
+                 * とも0.2秒待機する。セルのバナーと通常の画面の間の急激な移行を
+                 * 避けるため。
+                 */
                 if (w->live_resize.num_of_resize_events > 1 && OPT(resize_draw_strategy) == RESIZE_DRAW_SIZE) {
                     debounce_time = MAX(ms_to_monotonic_t(200ll), debounce_time);
                 }
@@ -1130,8 +1258,11 @@ process_pending_resizes(monotonic_t now) {
             }
         }
     }
-} /* process_pending_resizes */
+}
 
+/**
+ * 全てのウィンドウを閉じる
+ */
 static inline void
 close_all_windows(void) {
     for (size_t w = 0; w < global_state.num_os_windows; w++) {
@@ -1139,6 +1270,12 @@ close_all_windows(void) {
     }
 }
 
+/**
+ * 保留中のクローズイベントを処理する
+ *
+ * \param[in] self ChildMonitorオブジェクト
+ * \return 開いているウィンドウがあれば真
+ */
 static inline bool
 process_pending_closes(ChildMonitor *self) {
     global_state.has_pending_closes = false;
@@ -1168,7 +1305,7 @@ process_pending_closes(ChildMonitor *self) {
     }
 #endif
     return has_open_windows;
-} /* process_pending_closes */
+}
 
 #ifdef __APPLE__
 // If we create new OS windows during wait_events(), using global menu actions
@@ -1195,31 +1332,56 @@ set_cocoa_pending_action(CocoaPendingAction action, const char *wd) {
 
 static void process_global_state(void *data);
 
+/**
+ * メインループタイマからコールバックされる
+ *  実質アプリケーションのメインループ処理本体を読んでるだけ。
+ *  これ何の意味があるの？
+ *
+ * \param[in] timer_id 未使用
+ * \param[in] data ユーザーデータ
+ */
 static void
 do_state_check(id_type timer_id UNUSED, void *data) {
     EVDBG("State check timer fired");
     process_global_state(data);
 }
 
+/**
+ * タイマーID
+ */
 static id_type state_check_timer = 0;
 
+/**
+ * グローバル状態を処理する
+ *  メインループからコールバックされる
+ *  実質アプリケーションのメインループ処理
+ *
+ * \param[in] data ユーザデータ(ChildMonitorオブジェクト)
+ */
 static void
 process_global_state(void *data) {
     EVDBG("Processing global state");
+
     ChildMonitor *self = data;
     maximum_wait = -1;
     bool state_check_timer_enabled = false;
     bool input_read = false;
 
+    // リサイズ処理
     monotonic_t now = monotonic();
     if (global_state.has_pending_resizes) {
         process_pending_resizes(now);
         input_read = true;
     }
+
+    // 入力を解析する
     if (parse_input(self)) {
         input_read = true;
     }
+
+    // レンダリングする
     render(now, input_read);
+
 #ifdef __APPLE__
     if (cocoa_pending_actions) {
         if (cocoa_pending_actions & PREFERENCES_WINDOW) {
@@ -1241,6 +1403,8 @@ process_global_state(void *data) {
         cocoa_pending_actions = 0;
     }
 #endif
+
+    // 終了処理？
     if (global_state.terminate) {
         global_state.terminate = false;
         close_all_windows();
@@ -1248,6 +1412,7 @@ process_global_state(void *data) {
         request_application_quit();
 #endif
     }
+
     report_reaped_pids();
     bool has_open_windows = true;
     if (global_state.has_pending_closes) {
@@ -1264,22 +1429,38 @@ process_global_state(void *data) {
         }
     }
     else {
+        // メインループの停止
         stop_main_loop();
     }
-    update_main_loop_timer(state_check_timer, MAX(0, maximum_wait), state_check_timer_enabled);
-} /* process_global_state */
 
+    // メインループのタイマーを更新する
+    update_main_loop_timer(state_check_timer, MAX(0, maximum_wait), state_check_timer_enabled);
+}
+
+/**
+ * メインループ
+ *
+ * \param[in] self ChildMonitorオブジェクト
+ * \param[in] a 未使用
+ */
 static PyObject *
 main_loop(ChildMonitor *self, PyObject *a UNUSED) {
+// TODO この#defineいるの？
 #define main_loop_doc "The main thread loop"
+
+    // タイマーを追加
     state_check_timer = add_main_loop_timer(1000, true, do_state_check, self, NULL);
+
+    // メインループ実行(glfwの関数)
     run_main_loop(process_global_state, self);
+
 #ifdef __APPLE__
     if (cocoa_pending_actions_wd) {
         free(cocoa_pending_actions_wd);
         cocoa_pending_actions_wd = NULL;
     }
 #endif
+
     if (PyErr_Occurred()) {
         return NULL;
     }

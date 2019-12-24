@@ -248,7 +248,7 @@ cell_as_unicode(CPUCell *cell, bool include_cc, Py_UCS4 *buf, char_type zero_cha
 
     buf[0] = cell->ch ? cell->ch : zero_char;
     if (include_cc) {
-        for (unsigned i = 0; i < arraysz(cell->cc_idx) && cell->cc_idx[i]; i++) {
+        for (unsigned i = 0; i < arraysz(cell->cc_idx) && cell->cc_idx[i] != 0; i++) {
             buf[n++] = codepoint_for_mark(cell->cc_idx[i]);
         }
     }
@@ -261,7 +261,7 @@ cell_as_unicode_for_fallback(CPUCell *cell, Py_UCS4 *buf) {
 
     buf[0] = cell->ch ? cell->ch : ' ';
     if (buf[0] != '\t') {
-        for (unsigned i = 0; i < arraysz(cell->cc_idx) && cell->cc_idx[i]; i++) {
+        for (unsigned i = 0; i < arraysz(cell->cc_idx) && cell->cc_idx[i] != 0; i++) {
             if (cell->cc_idx[i] != VS15 && cell->cc_idx[i] != VS16) {
                 buf[n++] = codepoint_for_mark(cell->cc_idx[i]);
             }
@@ -481,37 +481,54 @@ width(Line *self, PyObject *val) {
 }
 
 /**
+ * 行に結合文字を追加する
+ *
+ * > 結合文字（けつごうもじ、英語: combining character）とは、文字コードにおい
+ * > て先行する文字と組み合わせるための図形文字をいう。ダイアクリティカルマーク
+ * > や、仮名の結合可能な濁点・半濁点、ヘブライ文字のニクダー、アラビア文字のシ
+ * > ャクル、ブラーフミー系文字の母音記号などが結合文字に属する。異体字セレクタ
+ * > も結合文字の一種である。 
+ * (via: https://ja.wikipedia.org/wiki/%E7%B5%90%E5%90%88%E6%96%87%E5%AD%97)
+ *
  * \param[in] self 行
- * \param[in] ch 文字コード
- * \param[in] x 桁位置
+ * \param[in] ch 文字コード(UTF32)
+ * \param[in] x 文字を追加する桁位置
  */
 void
 line_add_combining_char(Line *self, uint32_t ch, unsigned int x) {
+
     // x位置のCPUセルを得る
     CPUCell *cell = &self->cpu_cells[x];
 
     if (cell->ch == 0) {
-        // 幅が2の場合は直前のCPUセルを捕まえる
+
+        // 文字コードが登録されておらず、直前の文字の幅が2であれば x - 1 のセル
+        // を対象とする
         CPUCell *prev = &self->cpu_cells[x - 1];
         const GPUCell *gpu_cell = &self->gpu_cells[x - 1];
-        if (x > 0 && (gpu_cell->attrs & WIDTH_MASK) == 2 && prev->ch != 0) {
+        const attrs_type char_width = (gpu_cell->attrs & WIDTH_MASK);
+        if (x > 0 && char_width == 2 && prev->ch != 0) {
             cell = prev;
         }
         else {
-            return; // 結合文字をnullセルに追加することはできない
+            // nullセルに結合文字は追加できません
+            return;
         }
     }
 
-    // 合成文字配列に空きがあればマークをいれる
+    // 結合記号をマークにしておく
+    const combining_type mark = mark_for_codepoint(ch);
+
+    // 結合文字配列に空きがあれば結合記号をいれる
     for (unsigned i = 0; i < arraysz(cell->cc_idx); i++) {
         if (cell->cc_idx[i] == 0) {
-            cell->cc_idx[i] = mark_for_codepoint(ch);
+            cell->cc_idx[i] = mark;
             return;
         }
     }
 
     // 空きがなければ末尾にマークをいれる
-    cell->cc_idx[arraysz(cell->cc_idx) - 1] = mark_for_codepoint(ch);
+    cell->cc_idx[arraysz(cell->cc_idx) - 1] = mark;
 }
 
 static PyObject *
@@ -531,16 +548,23 @@ add_combining_char(Line *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+/**
+ * カーソル位置からテキストを設定する - Pythonインターフェイス
+ *
+ * \param[in] line Lineオブジェクト
+ * \param[in] args 引数
+ */
 static PyObject *
 set_text(Line *self, PyObject *args) {
+// このマクロいるのか？
 #define set_text_doc "set_text(src, offset, sz, cursor) -> Set the characters and attributes from the specified text and cursor"
+
+    // 引数を取得する
     PyObject *src;
-    Py_ssize_t offset, sz, limit;
-    char_type attrs;
+    Py_ssize_t offset, sz;
     Cursor *cursor;
     int kind;
     void *buf;
-
     if (!PyArg_ParseTuple(args, "UnnO!", &src, &offset, &sz, &Cursor_Type, &cursor)) {
         return NULL;
     }
@@ -548,28 +572,44 @@ set_text(Line *self, PyObject *args) {
         PyErr_NoMemory();
         return NULL;
     }
+
+    /*
+     * src[offset .. +sz] の部分テキストをカーソル位置移行にコピーする
+     */
+
+    // 文字種とバッファを得る
     kind = PyUnicode_KIND(src);
     buf = PyUnicode_DATA(src);
-    limit = offset + sz;
-    if (PyUnicode_GET_LENGTH(src) < limit) {
+
+    // 設定する文字列範囲が適切かどうかチェックする
+    const Py_ssize_t limit = offset + sz;
+    if (limit > PyUnicode_GET_LENGTH(src)) {
         PyErr_SetString(PyExc_ValueError, "Out of bounds offset/sz");
         return NULL;
     }
-    attrs = CURSOR_TO_ATTRS(cursor, 1);
-    color_type fg = (cursor->fg & COL_MASK), bg = cursor->bg & COL_MASK;
-    color_type dfg = cursor->decoration_fg & COL_MASK;
+
+    // カーソル位置の属性と色を得る
+    const attrs_type attrs = CURSOR_TO_ATTRS(cursor, 1);
+    const color_type fg = (cursor->fg & COL_MASK),
+                     bg = cursor->bg & COL_MASK;
+    const color_type dfg = cursor->decoration_fg & COL_MASK;
 
     for (index_type i = cursor->x; offset < limit && i < self->xnum; i++, offset++) {
+        // 文字コードポイントを入れるなり
         self->cpu_cells[i].ch = (PyUnicode_READ(kind, buf, offset));
+
+        // 結合文字情報はゼロクリアする
+        memset(self->cpu_cells[i].cc_idx, 0, sizeof(self->cpu_cells[i].cc_idx));
+
+        // 属性や色をセットするなり
         self->gpu_cells[i].attrs = attrs;
         self->gpu_cells[i].fg = fg;
         self->gpu_cells[i].bg = bg;
         self->gpu_cells[i].decoration_fg = dfg;
-        memset(self->cpu_cells[i].cc_idx, 0, sizeof(self->cpu_cells[i].cc_idx));
     }
 
     Py_RETURN_NONE;
-} /* set_text */
+}
 
 static PyObject *
 cursor_from(Line *self, PyObject *args) {
@@ -600,20 +640,25 @@ cursor_from(Line *self, PyObject *args) {
     return (PyObject *)ans;
 } /* cursor_from */
 
+/**
+ * 特定範囲を文字で埋める
+ *
+ * \param[in] self Lineオブジェクト
+ * \param[in] at クリアする位置
+ * \param[in] num クリアする桁数
+ * \param[in] ch 埋める文字のコードポイント
+ */
 void
 line_clear_text(Line *self, unsigned int at, unsigned int num, char_type ch) {
-    attrs_type width = ch ? 1 : 0;
+    const attrs_type width = ch != 0 ? 1 : 0;
+    for (index_type i = at; i < MIN(self->xnum, at + num); i++) {
+        // CPUセルにコードポイントを上書き
+        // 結合文字情報はクリア
+        self->cpu_cells[i].ch = ch;
+        memset(self->cpu_cells[i].cc_idx, 0, sizeof(self->cpu_cells[i].cc_idx));
 
-#define PREFIX \
-    for (index_type i = at; i < MIN(self->xnum, at + num); i++) { \
-        self->cpu_cells[i].ch = ch; memset(self->cpu_cells[i].cc_idx, 0, sizeof(self->cpu_cells[i].cc_idx)); \
-        self->gpu_cells[i].attrs = (self->gpu_cells[i].attrs & ATTRS_MASK_WITHOUT_WIDTH) | width; \
-    }
-    if (CHAR_IS_BLANK(ch)) {
-        PREFIX
-    }
-    else {
-        PREFIX
+        // GPUセルには文字幅を設定する
+        self->gpu_cells[i].attrs = (self->gpu_cells[i].attrs & ATTRS_MASK_WITHOUT_WIDTH) | width;
     }
 }
 
@@ -629,32 +674,50 @@ clear_text(Line *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+/**
+ * カーソルを配置する
+ *
+ * \param[in] self Lineオブジェクト
+ * \param[in] cursor Cursorオブジェクト
+ * \param[in] at 配置位置
+ * \param[in] num カーソルの幅なのか？
+ * \param[in] clear_char 文字をクリアする？
+ */
 void
 line_apply_cursor(Line *self, Cursor *cursor, unsigned int at, unsigned int num, bool clear_char) {
+
+    // カーソル位置の属性を取得する
     char_type attrs = CURSOR_TO_ATTRS(cursor, 1);
     color_type fg = (cursor->fg & COL_MASK), bg = (cursor->bg & COL_MASK);
     color_type dfg = cursor->decoration_fg & COL_MASK;
 
+    // 文字をクリアするなら文字幅を0にする
     if (!clear_char) {
-        attrs = attrs & ATTRS_MASK_WITHOUT_WIDTH;
+        attrs &= ATTRS_MASK_WITHOUT_WIDTH;
     }
 
     for (index_type i = at; i < self->xnum && i < at + num; i++) {
         if (clear_char) {
+
+            // CPUセルには空白文字をセット(結合文字情報もクリア)
             self->cpu_cells[i].ch = BLANK_CHAR;
             memset(self->cpu_cells[i].cc_idx, 0, sizeof(self->cpu_cells[i].cc_idx));
+
+            // GPUセルには属性をセットしてスプライト位置をクリアする
             self->gpu_cells[i].attrs = attrs;
             clear_sprite_position(self->gpu_cells[i]);
         }
         else {
-            attrs_type w = self->gpu_cells[i].attrs & WIDTH_MASK;
-            self->gpu_cells[i].attrs = attrs | w;
+
+            // 文字幅キープで属性のみ反映する
+            const attrs_type width = self->gpu_cells[i].attrs & WIDTH_MASK;
+            self->gpu_cells[i].attrs = attrs | width;
         }
         self->gpu_cells[i].fg = fg;
         self->gpu_cells[i].bg = bg;
         self->gpu_cells[i].decoration_fg = dfg;
     }
-} /* line_apply_cursor */
+}
 
 static PyObject *
 apply_cursor(Line *self, PyObject *args) {

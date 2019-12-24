@@ -1216,25 +1216,27 @@ screen_tab(Screen *self) {
     if (found != self->cursor->x) {
         if (self->cursor->x < self->columns) {
             linebuf_init_line(self->linebuf, self->cursor->y);
-            combining_type diff = found - self->cursor->x;
-            CPUCell *cpu_cell = &self->linebuf->line->cpu_cells[self->cursor->x];
+            const unsigned int diff = found - self->cursor->x;
+            CPUCell *cursor_cell = &self->linebuf->line->cpu_cells[self->cursor->x];
+
+            // カーソルからタブ位置までのセル群が全てNULまたは空白か調べる
             bool ok = true;
-            for (combining_type i = 0; i < diff; i++) {
-                CPUCell *cell = &cpu_cell[i];
-                if (cell->ch != ' ' && cell->ch != 0) {
+            for (unsigned int i = 0; i < diff; i++) {
+                CPUCell *following_cell = &cursor_cell[i];
+                if (following_cell->ch != ' ' && following_cell->ch != 0) {
                     ok = false;
                     break;
                 }
             }
             if (ok) {
-                // カーソル位置にタブ文字を入れて、航続のタブ幅部分は空白文字を埋める
-                for (combining_type i = 0; i < diff; i++) {
-                    CPUCell *cell = &cpu_cell[i];
+                // カーソル位置にタブ文字を入れて、後続のタブ幅部分は空白文字を埋める
+                for (unsigned int i = 0; i < diff; i++) {
+                    CPUCell *cell = &cursor_cell[i];
                     cell->ch = ' ';
                     zero_at_ptr_count(cell->cc_idx, arraysz(cell->cc_idx));
                 }
-                cpu_cell->ch = '\t';
-                cpu_cell->cc_idx[0] = diff;
+                cursor_cell->ch = '\t';
+                cursor_cell->cc_idx[0] = (combining_type)diff; // え!? 結合記号フォルダに次のタブ位置までの距離を入れるの!? 😮 
             }
         }
         self->cursor->x = found;
@@ -1993,6 +1995,12 @@ screen_use_latin1(Screen *self, bool on) {
     CALLBACK("use_utf8", "O", on ? Py_False : Py_True);
 }
 
+/**
+ * 色の反転が必要かどうか判定する
+ *
+ * \param[in] self スクリーン
+ * \return 色の反転が必要なら真
+ */
 bool
 screen_invert_colors(Screen *self) {
     bool inverted = false;
@@ -2006,7 +2014,7 @@ screen_invert_colors(Screen *self) {
         }
     }
     if (self->modes.mDECSCNM) {
-        inverted = inverted ? false : true;
+        inverted = !inverted;
     }
     return inverted;
 }
