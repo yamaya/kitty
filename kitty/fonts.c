@@ -62,7 +62,7 @@ enum {
 };
 
 /**
- * エクストラ・グリフ群
+ * エクストラ・グリフ
  */
 typedef struct {
     glyph_index data[MAX_NUM_EXTRA_GLYPHS];
@@ -1530,11 +1530,11 @@ render_group(
         bool center_glyph
 ) {
     static SpritePosition *sprite_position[16]; // なんでstatic...
-    int error = 0;
 
     // スプライト位置を求めて static 変数 sprite_positionを埋める
     num_cells = MIN(arraysz(sprite_position), num_cells);
     for (unsigned int i = 0; i < num_cells; i++) {
+        int error = 0;
         sprite_position[i] = sprite_position_for(fg, font, glyph, extra_glyphs, (uint8_t)i, &error);
         if (error != 0) {
             sprite_map_set_error(error);
@@ -1619,24 +1619,35 @@ typedef struct {
  * グループ構造体
  */
 typedef struct {
-    unsigned int first_glyph_idx,   /** 先頭グリフのインデックス */
-                 first_cell_idx,    /** 先頭セルのインデックス */
-                 num_glyphs,        /** グリフの個数 */
-                 num_cells;         /** セルの個数 */
-    bool has_special_glyph,         /** 特殊グリフを持っているか */
-         is_space_ligature;         /** 私用領域リガチャか */
+    /** 先頭グリフのインデックス */
+    unsigned int first_glyph_idx;
+
+    /** 先頭セルのインデックス */
+    unsigned int first_cell_idx;
+
+    /** グリフの個数 */
+    unsigned int num_glyphs;
+
+    /** セルの個数 */
+    unsigned int num_cells;
+
+    /** 特殊グリフを持っているか */
+    bool has_special_glyph;
+
+    /** 私用領域リガチャか */
+    bool is_space_ligature;
 } Group;
 
 /**
+ * グループにおける最大グリフ数
+ */
+#define MAX_GLYPHS_IN_GROUP (MAX_NUM_EXTRA_GLYPHS + 1u)
+
+/**
  * グループ状態構造体
- *  fonts.cの shape 関数が呼ばれる都度、初期化される
+ *  fonts.cの shape 関数が呼ばれる都度初期化される
  */
 typedef struct {
-    /**
-     * 直前のクラスタ
-     *  TODO これ多分いらない
-     */
-    uint32_t previous_cluster;
 
     /**
      * 直前は特殊グリフだったか
@@ -1665,6 +1676,7 @@ typedef struct {
 
     /**
      * カレントのグループのインデックス
+     *  shape 関数が終わったら後は、有効なグループの個数を示す
      */
     size_t group_idx;
 
@@ -1722,6 +1734,20 @@ typedef struct {
     hb_glyph_position_t *positions;
 } GroupState;
 
+static inline
+Group* group_state_move_glyph_to_next_group(GroupState* state, Group *group) {
+    const size_t start_cell_idx = state->cell_idx;
+    group->num_glyphs--;
+
+    state->group_idx++;
+
+    Group *next_group = &state->groups[state->group_idx];
+    next_group->first_cell_idx = start_cell_idx;
+    next_group->num_glyphs = 1;
+    next_group->first_glyph_idx = state->glyph_idx;
+    return next_group;
+}
+
 /**
  * グループ状態
  *  何故にstatic
@@ -1774,7 +1800,6 @@ shape(
     }
 
     // グループ状態の初期化
-    group_state.previous_cluster = UINT32_MAX;
     group_state.prev_was_special = false;
     group_state.prev_was_empty = false;
     group_state.current_cell_data.cpu_cell = first_cpu_cell;
@@ -1921,6 +1946,7 @@ check_cell_consumed(CellData *cell_data, CPUCell *last_cpu_cell) {
 
 /**
  * ランをレイアウトする
+ *  group_stateが更新される
  *
  * @param first_cpu_cell 先頭CPUセル
  * @param first_gpu_cell 先頭GPUセル
@@ -1936,8 +1962,7 @@ shape_run(
     Font *font,
     bool disable_ligature
 ) {
-    // レイアウトする
-    // これで group_state のメンバが埋められる
+    // レイアウトする - group_state のメンバが埋められる
     shape(first_cpu_cell, first_gpu_cell, num_cells, harfbuzz_font_for_face(font->face), font, disable_ligature);
 
     /*
@@ -1955,17 +1980,19 @@ shape_run(
      * グされる可能性があります。
      *
      * リガチャフォントは、2つの一般的なアプローチを取ります。
-     *  1. ABC は EMPTY、EMPTY、WIDE GLYPH になります。これは、N個のセルにN個のグ
-     *     リフをレンダリングする必要があることを意味します（例えば Fira Code）
-     *  2. ABC は WIDE GLYPHになります。これは、N個のセルに1つのグリフをレンダリ
-     *     ングすることを意味します（例：Operator Mono Lig）
+     *  1. ABC は EMPTY、EMPTY、WIDE GLYPH になります。これは、N個のセルにN個の
+     *     グリフをレンダリングする必要があることを意味します（例えば Fira Code）
+     *  2. ABC は WIDE GLYPHになります。これは、N個のセルに1つのグリフをレンダ
+     *     リングすることを意味します（例：Operator Mono Lig）
      *
-     * harfbuzzのクラスター番号に基づいて、グリフが対応するUnicodeコードポイントの数を確認します。
-     * 次に、グリフが合字グリフ（is_special_glyph）であり、空のグリフであるかどうかを確認します。
-     * この3つデータポイントは、さまざまなフォントについて、上記の制約を満たすのに十分な情報を提供します。
+     * harfbuzzのクラスター番号に基づいて、グリフが対応するUnicodeコードポイン
+     * トの数を確認します。
+     * 次に、グリフが合字グリフ（is_special_glyph）であり、空のグリフであるかど
+     * うかを確認します。
+     * この3つデータポイントは、さまざまなフォントについて、上記の制約を満たす
+     * のに十分な情報を提供します。
      */
 #define G(x) (group_state.x)
-#define MAX_GLYPHS_IN_GROUP (MAX_NUM_EXTRA_GLYPHS + 1u)
 
     while (G(glyph_idx) < G(num_glyphs) && G(cell_idx) < G(num_cells)) {
 
@@ -2001,18 +2028,23 @@ shape_run(
         }
 
         // 現在のグループに追加できるかどうか判定する
+        // カレントが1つもグリフ持っていないなら追加できる
         bool add_to_current_group;
         if (current_group->num_glyphs == 0) {
             add_to_current_group = true;
         }
         else {
+            // カレントグリフが特殊文字で直前が空グリフであれば追加できる
             if (is_special) {
                 add_to_current_group = G(prev_was_empty);
             }
             else {
+                // 直前が特殊文字であれば追加できる
                 add_to_current_group = !G(prev_was_special);
             }
         }
+
+        // 保有グリフ可能数を超えたら無理
         if (current_group->num_glyphs >= MAX_GLYPHS_IN_GROUP ||
             current_group->num_cells >= MAX_GLYPHS_IN_GROUP) {
             add_to_current_group = false;
@@ -2029,15 +2061,6 @@ shape_run(
             current_group->first_cell_idx = G(cell_idx);
         }
 
-#define MOVE_GLYPH_TO_NEXT_GROUP(start_cell_idx) { \
-        current_group->num_glyphs--; \
-        G(group_idx)++; \
-        current_group = G(groups) + G(group_idx); \
-        current_group->first_cell_idx = start_cell_idx; \
-        current_group->num_glyphs = 1; \
-        current_group->first_glyph_idx = G(glyph_idx); \
-}
-
         if (is_special) {
             current_group->has_special_glyph = true;
         }
@@ -2051,7 +2074,7 @@ shape_run(
 
                 // グリフを次のグループに移動する
                 if (current_group->num_cells + slots > MAX_GLYPHS_IN_GROUP) {
-                    MOVE_GLYPH_TO_NEXT_GROUP(G(cell_idx));
+                    current_group = group_state_move_glyph_to_next_group(&group_state, current_group);
                 }
                 current_group->num_cells += slots;
 
@@ -2087,8 +2110,9 @@ shape_run(
                     }
                 }
                 else {
+                    // グリフを次のグループに移動する
                     if (num_cells_consumed + current_group->num_cells > MAX_GLYPHS_IN_GROUP) {
-                        MOVE_GLYPH_TO_NEXT_GROUP(start_cell_idx); // グリフを次のグループに移動する
+                        current_group = group_state_move_glyph_to_next_group(&group_state, current_group);
                     }
                     current_group->num_cells += num_cells_consumed;
                     if (!is_special) {  // リガチャではない、グループの末端。
@@ -2101,11 +2125,8 @@ shape_run(
 
         G(prev_was_special) = is_special;
         G(prev_was_empty) = is_empty;
-        G(previous_cluster) = cluster;
         G(glyph_idx)++;
     }
-#undef MOVE_GLYPH_TO_NEXT_GROUP
-#undef MAX_GLYPHS_IN_GROUP
 }
 
 /**
@@ -2114,37 +2135,51 @@ shape_run(
 static inline void
 merge_groups_for_pua_space_ligature(void) {
     // グループ配列を前詰する
-    while (G(group_idx) > 0) {
-        Group *g = G(groups), *g1 = G(groups) + 1;
-        g->num_cells += g1->num_cells;
-        g->num_glyphs += g1->num_glyphs;
-        g->num_glyphs = MIN(g->num_glyphs, MAX_NUM_EXTRA_GLYPHS + 1);
-        G(group_idx)--;
+    GroupState *gs = &group_state;
+    while (gs->group_idx > 0) {
+        Group *g0 = &gs->groups[0];
+        Group *g1 = &gs->groups[1];
+
+        // g1の内容をg0に加える
+        g0->num_cells += g1->num_cells;
+        g0->num_glyphs += g1->num_glyphs;
+        g0->num_glyphs = MIN(g0->num_glyphs, MAX_NUM_EXTRA_GLYPHS + 1);
+        gs->group_idx--;
     }
-    G(groups)->is_space_ligature = true;
+    gs->groups->is_space_ligature = true;
 }
 
 /**
- * 指定されたオフセットを含むランの範囲を取得する
- *  NOTE: splitはしてないと思うぜ
+ * 指定されたオフセット上のランが分割可能ならそのランの範囲を得る
  *
- * @param cursor_offset オフセット
- * @param left ランの開始位置 [out]
- * @param right ランの終了位置 [out]
+ *  以下の条件ならランを分割できる:
+ *  - セルが2個以上あり
+ *  - 特殊グリフを含有しており
+ *  - ランの先頭セルの文字幅が1
+ *
+ * \param[in] offset オフセット
+ * \param[in] left ランの開始位置 [out]
+ * \param[in] right ランの終了位置 [out]
  */
 static inline void
-split_run_at_offset(index_type cursor_offset, index_type *left, index_type *right) {
+split_run_at_offset(index_type offset, index_type *left, index_type *right) {
+    // ランが見つからない場合は0を返す
     *left = 0;
     *right = 0;
-    for (unsigned idx = 0; idx < G(group_idx) + 1; idx++) {
-        Group *group = G(groups) + idx;
+
+    // 有効な全てのグループを舐める
+    for (unsigned i = 0; i < group_state.group_idx + 1; i++) {
+        // offsetがグループのセルインデックス範囲に含まれるかどうかを調べる
+        Group *group = &group_state.groups[i];
         const unsigned int from = group->first_cell_idx;
         const unsigned int to = group->first_cell_idx + group->num_cells;
-        if (from <= cursor_offset && cursor_offset < to) {
-            GPUCell *first_cell = G(first_gpu_cell) + from;
-            if (group->num_cells > 1 && group->has_special_glyph && (first_cell->attrs & WIDTH_MASK) == 1) {
+        if (from <= offset && offset < to) {
+            GPUCell *first_cell = &group_state.first_gpu_cell[from];
+            if (group->num_cells > 1 &&
+                group->has_special_glyph &&
+                (first_cell->attrs & WIDTH_MASK) == 1) {
                 // おそらく単一の `calt` リガチャ
-                // `calt`: 前後関係に依存する字形。リガチャとは異なる。
+                // `calt`: 前後関係に依存する字形でリガチャとは異なる。
                 *left = from;
                 *right = to;
             }
@@ -2162,41 +2197,47 @@ split_run_at_offset(index_type cursor_offset, index_type *left, index_type *righ
  */
 static inline void
 render_groups(FontGroup *fg, Font *font, bool center_glyph) {
-    unsigned idx = 0;
-    ExtraGlyphs ed;
-
     // 先頭のグループから舐めていく
-    while (idx <= G(group_idx)) {
-        Group *group = G(groups) + idx;
+    for (unsigned i = 0; i <= group_state.group_idx; i++) {
+        Group *group = &group_state.groups[i];
+
+        // グループにセルがなければ終わり
         if (group->num_cells == 0) {
-            break; // グループにセルがなければ終わり
+            break;
         }
-        glyph_index primary = group->num_glyphs ? G(info)[group->first_glyph_idx].codepoint : 0;
+
+        // 先頭のコードポイントを得る
+        const glyph_index gi = group->num_glyphs != 0 ?
+            group_state.info[group->first_glyph_idx].codepoint : 0;
+
+        // 残りのコードポイントを ExtraGlyphs に詰める
+        ExtraGlyphs ed;
         int last = -1;
-        for (unsigned int i = 1; i < MIN(arraysz(ed.data) + 1, group->num_glyphs); i++) {
-            last = i - 1;
-            ed.data[last] = G(info)[group->first_glyph_idx + i].codepoint;
+        for (unsigned int j = 1; j < MIN(arraysz(ed.data) + 1, group->num_glyphs); j++) {
+            last = j - 1;
+            ed.data[last] = group_state.info[group->first_glyph_idx + j].codepoint;
         }
         if ((size_t)(last + 1) < arraysz(ed.data)) {
             ed.data[last + 1] = 0;
         }
 
-        // PUAリガチャでスペースをレンダリングしたくないのは、 Powerline
+        // PUAリガチャでスペースをレンダリングしたくないのは、Powerline
         // のようなスペースグリフのない愚かなフォントが存在するから。
         // 特別な場合：https://github.com/kovidgoyal/kitty/issues/1225
         const unsigned int num_glyphs = group->is_space_ligature ? 1 : group->num_glyphs;
+
+        // グループのレンダリング
         render_group(fg,
                      group->num_cells,
                      num_glyphs,
-                     G(first_cpu_cell) + group->first_cell_idx,
-                     G(first_gpu_cell) + group->first_cell_idx,
-                     G(info) + group->first_glyph_idx,
-                     G(positions) + group->first_glyph_idx,
+                     &group_state.first_cpu_cell[group->first_cell_idx],
+                     &group_state.first_gpu_cell[group->first_cell_idx],
+                     &group_state.info[group->first_glyph_idx],
+                     &group_state.positions[group->first_glyph_idx],
                      font,
-                     primary,
+                     gi,
                      &ed,
                      center_glyph);
-        idx++;
     }
 }
 
@@ -2296,41 +2337,44 @@ render_run(
     DisableLigature disable_ligature_strategy
 ) {
     switch (font_idx) {
-    default:
+    default: {
+        Font *font = &fg->fonts[font_idx];
         // 全体をレイアウトする
         shape_run(first_cpu_cell,
                   first_gpu_cell,
                   num_cells,
-                  &fg->fonts[font_idx],
+                  font,
                   disable_ligature_strategy == DISABLE_LIGATURES_ALWAYS);
         if (pua_space_ligature) {
             merge_groups_for_pua_space_ligature();
         }
         else if (cursor_offset > -1) {
+            // 分割レンダリングすべきかどうか調べる
             index_type left, right;
             split_run_at_offset(cursor_offset, &left, &right);
             if (right > left) {
                 // 先頭からleftまでをレイアウトしてレンダリングする
-                if (left) {
-                    shape_run(first_cpu_cell, first_gpu_cell, left, &fg->fonts[font_idx], false);
-                    render_groups(fg, &fg->fonts[font_idx], center_glyph);
+                if (left != 0) {
+                    shape_run(first_cpu_cell, first_gpu_cell, left, font, false);
+                    render_groups(fg, font, center_glyph);
                 }
 
                 // leftからrightまでを(リガチャ無効で)レイアウトしてレンダリング
-                shape_run(&first_cpu_cell[left], &first_gpu_cell[left], right - left, &fg->fonts[font_idx], true);
-                render_groups(fg, &fg->fonts[font_idx], center_glyph);
+                shape_run(&first_cpu_cell[left], &first_gpu_cell[left], right - left, font, true);
+                render_groups(fg, font, center_glyph);
 
                 // rightから最後までをレイアウトしてレンダリング
                 if (right < num_cells) {
-                    shape_run(&first_cpu_cell[right], &first_gpu_cell[right], num_cells - right, &fg->fonts[font_idx], false);
-                    render_groups(fg, &fg->fonts[font_idx], center_glyph);
+                    shape_run(&first_cpu_cell[right], &first_gpu_cell[right], num_cells - right, font, false);
+                    render_groups(fg, font, center_glyph);
                 }
                 break;
             }
         }
         // レンダリングする
-        render_groups(fg, &fg->fonts[font_idx], center_glyph);
+        render_groups(fg, font, center_glyph);
         break;
+    }
     case BLANK_FONT:
         while (num_cells--) {
             set_sprite(first_gpu_cell, 0, 0, 0);
