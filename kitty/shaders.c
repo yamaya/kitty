@@ -432,6 +432,8 @@ cell_update_uniform_block(
     static struct CellRenderData *rd; // TODO: 何でstatic?
 
     // とにかく rd を構成するコードが延々続く
+
+    // GLバッファをマップしそのアドレスを得る
     rd = (struct CellRenderData *)map_vao_buffer(vao_idx, uniform_buffer, GL_WRITE_ONLY);
 
     // 色テーブルをバッファにコピーする
@@ -577,10 +579,10 @@ cell_prepare_to_render(ssize_t vao_idx,
         // GPUセルの個数を求める
         sz = sizeof(GPUCell) * screen->lines * screen->columns;
 
-        // VAOバッファを確保して割り当てる
+        // VAOバッファをマップしてその先頭アドレスを得る
         address = alloc_and_map_vao_buffer(vao_idx, sz, cell_data_buffer, GL_STREAM_DRAW, GL_WRITE_ONLY);
 
-        // セルデータを更新する
+        // VAOバッファにセルデータを敷き詰める
         screen_update_cell_data(screen, address, fonts_data, disable_ligatures && cursor_pos_changed);
 
         // VAOバッファの割当を解除する
@@ -831,7 +833,7 @@ draw_cells_interleaved_premult(ssize_t vao_idx, ssize_t gvao_idx, Screen *screen
     glBindTexture(GL_TEXTURE_2D, os_window->offscreen_texture_id);
     glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
     glDisable(GL_SCISSOR_TEST);
-} /* draw_cells_interleaved_premult */
+}
 
 /**
  * セルの情報をユニフォーム変数に設定する
@@ -1100,7 +1102,7 @@ draw_borders(
 ) {
     if (num_border_rects) {
         if (rect_data_is_dirty) {
-            // VAOにボーダー用のバッファを割り当てる
+            // VAOに枠線用のバッファを割り当てる
             size_t sz = sizeof(GLuint) * 5 * num_border_rects;
             void *borders_buf_address = alloc_and_map_vao_buffer(vao_idx, sz, 0, GL_STATIC_DRAW, GL_WRITE_ONLY);
             if (borders_buf_address) {

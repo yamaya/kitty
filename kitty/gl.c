@@ -242,7 +242,7 @@ alloc_buffer(ssize_t idx, GLsizeiptr size, GLenum usage) {
         return;
     }
     buffer->size = size;
-    glBufferData(buffer->usage, size, NULL, usage);
+    glBufferData(buffer->usage, size, NULL, usage); // dataがNULLなので領域の確保のみ
 }
 
 /**
@@ -347,7 +347,7 @@ add_located_attribute_to_vao(ssize_t vao_idx,
         glVertexAttribDivisor(aloc, divisor);
     }
     unbind_buffer(buf);
-} /* add_located_attribute_to_vao */
+}
 
 void
 add_attribute_to_vao(int p,

@@ -236,6 +236,9 @@ typedef struct {
 
 /**
  * GPUセル
+ *  Line構造体がこの構造体の配列を持つ(要素数は桁数)
+ *  この構造体がVAOバッファに敷き詰められる
+ *  cell_prepare_to_render 関数 > screen_update_cell_data 関数の呼び出しをチェックされたし
  */
 typedef struct {
     color_type fg;  /** 前景色 */

@@ -29,11 +29,14 @@ layout(std140) uniform CellRenderData {
 
 // CELL用プログラムの全亜種が同一VAOを共有するため、固定のロケーションを使用す
 // る必要がある
-layout(location=0) in uvec3 colors;
-layout(location=1) in uvec4 sprite_coords;
-layout(location=2) in uint is_selected;
+// C実装は shaders.cの init_cell_program を参照
+layout(location = 0) in uvec3 colors;
+layout(location = 1) in uvec4 sprite_coords;
+layout(location = 2) in uint is_selected;
 
 const int fg_index_map[] = int[3](0, 1, 0);
+
+// TODO: 頂点バッファを構築するコードがない...
 const uvec2 cell_pos_map[] = uvec2[4](
     uvec2(1, 0),  // right, top
     uvec2(1, 1),  // right, bottom
@@ -148,7 +151,7 @@ float is_cursor(uint xi, uint y) {
 void main() {
 
 	//
-	// セルの頂点位置はインスタンススIDから求める
+	// セルの頂点位置はインスタンスIDから求める
 	//
     uint instance_id = uint(gl_InstanceID);
     uint row = instance_id / xnum; // スクリーンの幅(セル数)で割る

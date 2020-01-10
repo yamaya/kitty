@@ -231,8 +231,12 @@ attach_window(id_type os_window_id, id_type tab_id, id_type id) {
                 if (
                     w->render_data.screen->cell_size.width != osw->fonts_data->cell_width ||
                     w->render_data.screen->cell_size.height != osw->fonts_data->cell_height
-                ) resize_screen(osw, w->render_data.screen, true);
-                else screen_dirty_sprite_positions(w->render_data.screen);
+                ) {
+                    resize_screen(osw, w->render_data.screen, true);
+                }
+                else {
+                    screen_dirty_sprite_positions(w->render_data.screen);
+                }
                 w->render_data.screen->reload_all_gpu_data = true;
                 break;
             }
@@ -333,7 +337,11 @@ add_borders_rect(id_type os_window_id, id_type tab_id, uint32_t left, uint32_t t
         if (!left && !top && !right && !bottom) { br->num_border_rects = 0; return; }
         ensure_space_for(br, rect_buf, BorderRect, br->num_border_rects + 1, capacity, 32, false);
         BorderRect *r = br->rect_buf + br->num_border_rects++;
-        r->left = left; r->right = right; r->top = top; r->bottom = bottom; r->color = color;
+        r->left = left;
+        r->right = right;
+        r->top = top;
+        r->bottom = bottom;
+        r->color = color;
     END_WITH_TAB
 }
 
