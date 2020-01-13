@@ -192,8 +192,9 @@ ensure_sprite_map(FONTS_DATA_HANDLE fg) {
     if (!sprite_map->texture_id) {
         realloc_sprite_texture(fg);
     }
-    // We have to rebind since we don't know if the texture was ever bound
-    // in the context of the current OSWindow
+
+    // テクスチャが現在のOSWindowのコンテキストでバインドされたかどうかわからな
+    // いため、再バインドする必要があります
     glActiveTexture(GL_TEXTURE0 + SPRITE_MAP_UNIT);
     glBindTexture(GL_TEXTURE_2D_ARRAY, sprite_map->texture_id);
 }

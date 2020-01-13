@@ -185,7 +185,7 @@ void main() {
 	// 前景
 	//
 #ifdef NEEDS_FOREGROUND
-	// レンダリングされる文字スプライト
+	// レンダリングされる文字スプライトの座標
     sprite_pos = to_sprite_pos(pos, sprite_coords.x, sprite_coords.y, sprite_coords.z & Z_MASK);
     colored_sprite = float((sprite_coords.z & COLOR_MASK) >> 14);
 
