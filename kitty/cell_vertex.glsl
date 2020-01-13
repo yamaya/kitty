@@ -36,7 +36,9 @@ layout(location = 2) in uint is_selected;
 
 const int fg_index_map[] = int[3](0, 1, 0);
 
-// TODO: 頂点バッファを構築するコードがない...
+// 頂点バッファを構築するコードがないが、 glDrawArraysInstancedはfirst=0,
+// count=4でコールされているので、インスタンス毎に4回呼び出される仕組み。
+// http://marina.sys.wakayama-u.ac.jp/~tokoi/?date=20160831
 const uvec2 cell_pos_map[] = uvec2[4](
     uvec2(1, 0),  // right, top
     uvec2(1, 1),  // right, bottom

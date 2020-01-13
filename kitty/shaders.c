@@ -953,6 +953,14 @@ draw_cells(
     bool can_be_focused
 ) {
     CELL_BUFFERS;
+    /*
+     * 以下の#define
+    enum { \
+        cell_data_buffer, \
+        selection_buffer, \
+        uniform_buffer \
+    };
+    */
 
     // 色の反転が必要かどうか判定する
     const bool inverted = screen_invert_colors(screen);
