@@ -78,7 +78,7 @@ out float effective_text_alpha;
 #endif
 
 
-// Utility functions {{{
+// 便利関数 {{{
 const uint BYTE_MASK = uint(0xFF);
 const uint Z_MASK = uint(0xFFF);
 const uint COLOR_MASK = uint(0x4000);
@@ -127,8 +127,9 @@ vec3 choose_color(float q, vec3 a, vec3 b) {
     return mix(b, a, q);
 }
 
-float are_integers_equal(float a, float b) { // return 1 if equal otherwise 0
-    float delta = abs(a - b);  // delta can be 0, 1 or larger
+// 等しい場合は1を返し、それ以外の場合は0を返します
+float are_integers_equal(float a, float b) {
+    float delta = abs(a - b);  // デルタは0、1、またはそれ以上にすることができます
     return step(delta, 0.5); // 0 if 0.5 < delta else 1
 }
 
@@ -142,28 +143,26 @@ float is_cursor(uint xi, uint y) {
 }
 // }}}
 
-//
-// メイン関数
-//
-// - gl_VertexID
-// 	 頂点シェーダが実行されているときの対象頂点のインデックスが格納されている変数
-// - gl_InstanceID
-//   インスタンシングによって描かれているときのインスタンスのインデックス
-//
+/*
+ * メイン関数
+ *
+ * - gl_VertexID
+ * 	 頂点シェーダが実行されているときの対象頂点のインデックスが格納されている変数
+ * - gl_InstanceID
+ *   インスタンシングによって描かれているときのインスタンスのインデックス
+ */
 void main() {
 
-	//
-	// セルの頂点位置はインスタンスIDから求める
-	//
+	// セルの頂点位置は gl_InstanceID から求める
     uint instance_id = uint(gl_InstanceID);
-    uint row = instance_id / xnum; // スクリーンの幅(セル数)で割る
-    uint col = instance_id - (row * xnum); // スクリーンの幅の余りでも良い
+    uint row = instance_id / xnum;          // スクリーンの幅(セル数)で割る
+    uint col = instance_id - (row * xnum);  // スクリーンの幅の余りでも良い
 
 	// 頂点の位置(セル角)
     float left = xstart + col * dx;
     float top = ystart - row * dy;
-    vec2 xpos = vec2(left, left + dx); // left, rightのペア
-    vec2 ypos = vec2(top, top - dy); // top, bottomのペア
+    vec2 xpos = vec2(left, left + dx);  // left, rightのペア
+    vec2 ypos = vec2(top, top - dy);    // top, bottomのペア
     uvec2 pos = cell_pos_map[gl_VertexID];
     gl_Position = vec4(xpos[pos.x], ypos[pos.y], 0, 1);
 

@@ -46,7 +46,7 @@ update_os_window_viewport(OSWindow *window, bool notify_boss) {
 
     if (fw == window->viewport_width && fh == window->viewport_height && w == window->window_width &&
         h == window->window_height && xdpi == window->logical_dpi_x && ydpi == window->logical_dpi_y) {
-        return; // no change, ignore
+        return; // 変化なしのでNOP
     }
     if (w <= 0 || h <= 0 || fw / w > 5 || fh / h > 5 || fw < min_width || fh < min_height || fw < w || fh < h) {
         log_error("Invalid geometry ignored: framebuffer: %dx%d window: %dx%d\n", fw, fh, w, h);

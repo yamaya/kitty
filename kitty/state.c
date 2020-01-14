@@ -637,10 +637,12 @@ PYWRAP1(viewport_for_window) {
     unsigned int cell_width = 1, cell_height = 1;
     PA("K", &os_window_id);
     Region central = {0}, tab_bar = {0};
-    WITH_OS_WINDOW(os_window_id)
+    WITH_OS_WINDOW(os_window_id) // ここで os_window というローカル変数が宣言される
         os_window_regions(os_window, &central, &tab_bar);
-        vw = os_window->viewport_width; vh = os_window->viewport_height;
-        cell_width = os_window->fonts_data->cell_width; cell_height = os_window->fonts_data->cell_height;
+        vw = os_window->viewport_width;
+        vh = os_window->viewport_height;
+        cell_width = os_window->fonts_data->cell_width;
+        cell_height = os_window->fonts_data->cell_height;
         goto end;
     END_WITH_OS_WINDOW
 end:
