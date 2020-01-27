@@ -249,7 +249,12 @@ typedef struct {
     id_type id;
     unsigned int baseline, underline_position, underline_thickness;
     size_t fonts_capacity, fonts_count, fallback_fonts_count;
-    ssize_t medium_font_idx, bold_font_idx, italic_font_idx, bi_font_idx, first_symbol_font_idx, first_fallback_font_idx;
+    ssize_t medium_font_idx,
+            bold_font_idx,
+            italic_font_idx,
+            bi_font_idx,
+            first_symbol_font_idx,
+            first_fallback_font_idx;
     Font *fonts;
     pixel *canvas;
 
@@ -908,7 +913,7 @@ python_send_to_gpu(FONTS_DATA_HANDLE fg, unsigned int x, unsigned int y, unsigne
 static inline void
 calc_cell_metrics(FontGroup *fg) {
 
-    // 関数一発呼ぶわ
+    // ミディアムフォントで寸法を図る
     unsigned int cell_height, cell_width, baseline, underline_position, underline_thickness;
     cell_metrics(fg->fonts[fg->medium_font_idx].face,
                  &cell_width,
@@ -2604,9 +2609,11 @@ clear_symbol_maps(void) {
 
 /**
  * デスクリプタインデックス
+ *  メンバには render.py で保持している current_faces 配列のインデックスが格納
+ *  される
  */
 typedef struct {
-    unsigned int main,
+    unsigned int main, // aka. medium
                  bold,
                  italic,
                  bi,

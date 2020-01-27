@@ -191,17 +191,18 @@ font_descriptor_to_python(CTFontDescriptorRef descriptor) {
     NSNumber *weightVal = traits[(id)kCTFontWeightTrait];
     NSNumber *widthVal = traits[(id)kCTFontWidthTrait];
 
-    PyObject *ans = Py_BuildValue("{ssssssss sOsOsO sfsfsI}",
-                                  "path", [[url path] UTF8String],
-                                  "postscript_name", [psName UTF8String],
-                                  "family", [family UTF8String],
-                                  "style", [style UTF8String],
-                                  "bold", (straits & kCTFontBoldTrait) != 0 ? Py_True : Py_False,
-                                  "italic", (straits & kCTFontItalicTrait) != 0 ? Py_True : Py_False,
-                                  "monospace", (straits & kCTFontMonoSpaceTrait) != 0 ? Py_True : Py_False,
-                                  "weight", [weightVal floatValue],
-                                  "width", [widthVal floatValue],
-                                  "traits", straits);
+    PyObject *ans = Py_BuildValue(
+            "{ssssssss sOsOsO sfsfsI}",
+            "path", [[url path] UTF8String],
+            "postscript_name", [psName UTF8String],
+            "family", [family UTF8String],
+            "style", [style UTF8String],
+            "bold", (straits & kCTFontBoldTrait) != 0 ? Py_True : Py_False,
+            "italic", (straits & kCTFontItalicTrait) != 0 ? Py_True : Py_False,
+            "monospace", (straits & kCTFontMonoSpaceTrait) != 0 ? Py_True : Py_False,
+            "weight", [weightVal floatValue],
+            "width", [widthVal floatValue],
+            "traits", straits);
 
     [url release];
     [psName release];
@@ -209,7 +210,7 @@ font_descriptor_to_python(CTFontDescriptorRef descriptor) {
     [style release];
     [traits release];
     return ans;
-} /* font_descriptor_to_python */
+}
 
 /**
  * PyObjectをCTFontDescriptorに変換する
@@ -267,7 +268,8 @@ all_fonts_collection() {
  */
 static PyObject *
 coretext_all_fonts(PyObject UNUSED *_self) {
-    CFArrayRef matches = CTFontCollectionCreateMatchingFontDescriptors(all_fonts_collection());
+    CTFontCollectionRef collection = all_fonts_collection();
+    CFArrayRef matches = CTFontCollectionCreateMatchingFontDescriptors(collection);
     const CFIndex count = CFArrayGetCount(matches);
     PyObject *ans = PyTuple_New(count), *temp;
 
@@ -276,7 +278,7 @@ coretext_all_fonts(PyObject UNUSED *_self) {
     }
     for (CFIndex i = 0; i < count; i++) {
         temp = font_descriptor_to_python((CTFontDescriptorRef)CFArrayGetValueAtIndex(matches, i));
-        if (temp == NULL) {
+        if (!temp) {
             Py_DECREF(ans);
             return NULL;
         }
@@ -325,7 +327,8 @@ is_last_resort_font(CTFontRef new_font) {
  */
 static inline CTFontRef
 manually_search_fallback_fonts(CTFontRef current_font, CPUCell *cell) {
-    CFArrayRef fonts = CTFontCollectionCreateMatchingFontDescriptors(all_fonts_collection());
+    CTFontCollectionRef collection = all_fonts_collection();
+    CFArrayRef fonts = CTFontCollectionCreateMatchingFontDescriptors(collection);
     CTFontRef ans = NULL;
     const CFIndex count = CFArrayGetCount(fonts);
 

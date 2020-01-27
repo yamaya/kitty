@@ -25,6 +25,7 @@ else:
 current_faces = None
 
 
+# シンボルマップの結合
 def coalesce_symbol_maps(maps):
     if not maps:
         return maps
@@ -46,6 +47,8 @@ def coalesce_symbol_maps(maps):
     return dict(ans)
 
 
+# kitty.confの `symbol_map U+3000-U+30FF,U+4E00-U+9FCF,U+FF00-U+FFEF M+ 1mn` を
+# パースする
 def create_symbol_map(opts):
     val = coalesce_symbol_maps(opts.symbol_map)
     family_map = {}
@@ -87,19 +90,39 @@ def set_font_family(opts=None, override_font_size=None, debug_font_matching=Fals
     global current_faces
     opts = opts or defaults
     sz = override_font_size or opts.font_size
+
+    # core_text.mの関数を呼ぶ
     font_map = get_font_files(opts)
-    current_faces = [(font_map['medium'], False, False)]
-    ftypes = 'bold italic bi'.split()
+
+    # === descriptor_indices の設定 ===
+
+    # medium, bold, italic, boldItalicを用意する(単にスロットを用意しているだけ)
+    current_faces = [(font_map['medium'], False, False)] // style, bold有無, italic有無
+        # current_facesってなんだろ？フォント名が欲しいがためのデータセットなのか？
+        # 意図がよーわからん
+    ftypes = 'bold italic bi'.split() # [bold, italic, boldItalic]
+
+    # indicesの内容:
+    # [0] medimuフォントのcurrent_facesのインデックス = 0
+    # [1] bold (略 = 1
+    # [2] italic (略 = 2
+    # [3] bold italic (略 = 3
+    # [4] symbol_mapに定義されたフォント = 4
+    # :
+    #
     indices = {k: 0 for k in ftypes}
     for k in ftypes:
         if k in font_map:
             indices[k] = len(current_faces)
             current_faces.append((font_map[k], 'b' in k, 'i' in k))
-    before = len(current_faces)
-    sm = create_symbol_map(opts)
-    num_symbol_fonts = len(current_faces) - before
+    before = len(current_faces) # この時点のインデックスを得ておく
+    sm = create_symbol_map(opts) # `symbol_map` オプションを評価してフォントをcurrent_facesに詰める
+    num_symbol_fonts = len(current_faces) - before # シンボルマップフォントの個数を得る
     if debug_font_matching:
         dump_faces(ftypes, indices)
+    # render_box_drawing: 罫線描画関数
+    # prerender_function: 事前描画関数
+    # descriptor_for_idx: current_faces中のFaceを取得する関数
     set_font_data(
         render_box_drawing, prerender_function, descriptor_for_idx,
         indices['bold'], indices['italic'], indices['bi'], num_symbol_fonts,
@@ -222,7 +245,7 @@ def render_cursor(which, cell_width=0, cell_height=0, dpi_x=0, dpi_y=0):
 
 
 def prerender_function(cell_width, cell_height, baseline, underline_position, underline_thickness, dpi_x, dpi_y):
-    # Pre-render the special underline, strikethrough and missing and cursor cells
+    # 特別な下線、取り消し線、欠落およびカーソルセルを事前にレンダリングします
     f = partial(
         render_special, cell_width=cell_width, cell_height=cell_height, baseline=baseline,
         underline_position=underline_position, underline_thickness=underline_thickness)
@@ -232,11 +255,12 @@ def prerender_function(cell_width, cell_height, baseline, underline_position, un
     return tuple(map(ctypes.addressof, cells)) + (cells,)
 
 
+# 罫線を描画する (fonts.cから呼び出される)
 def render_box_drawing(codepoint, cell_width, cell_height, dpi):
     CharTexture = ctypes.c_ubyte * (cell_width * cell_height)
     buf = render_box_char(
         chr(codepoint), CharTexture(), cell_width, cell_height, dpi
-    )
+    ) # box_drawing.py
     return ctypes.addressof(buf), buf
 
 

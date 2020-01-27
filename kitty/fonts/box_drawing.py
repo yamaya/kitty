@@ -658,6 +658,7 @@ for chars, func in (('╒╕╘╛', dvcorner), ('╓╖╙╜', dhcorner), ('�
         box_chars[ch] = [p(func, which=ch)]
 
 
+# 罫線を描画する
 def render_box_char(ch, buf, width, height, dpi=96.0):
     global _dpi
     _dpi = dpi

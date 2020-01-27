@@ -13,19 +13,24 @@ attr_map = {(False, False): 'font_family',
             (True, True): 'bold_italic_font'}
 
 
+# フォントマップは以下の辞書でkey-valueは以下:
+#   - family_map: キーがファミリ名で値がフォント情報の辞書
+#   - ps_map: キーがPostscript名で値がフォント情報の辞書
+#   - full_map: キーが"ファミリ名 Postscript名"で値がフォントの辞書
 def create_font_map(all_fonts):
     ans = {'family_map': {}, 'ps_map': {}, 'full_map': {}}
-    for x in all_fonts:
-        f = (x['family'] or '').lower()
-        s = (x['style'] or '').lower()
-        ps = (x['postscript_name'] or '').lower()
-        ans['family_map'].setdefault(f, []).append(x)
-        ans['ps_map'].setdefault(ps, []).append(x)
-        ans['full_map'].setdefault(f + ' ' + s, []).append(x)
+    for font in all_fonts:
+        f = (font['family'] or '').lower()
+        s = (font['style'] or '').lower()
+        ps = (font['postscript_name'] or '').lower()
+        ans['family_map'].setdefault(f, []).append(font)
+        ans['ps_map'].setdefault(ps, []).append(font)
+        ans['full_map'].setdefault(f + ' ' + s, []).append(font)
     return ans
 
 
 def all_fonts_map():
+    # この関数の`ans`属性にcreate_font_mapの結果を突っ込んでおく
     ans = getattr(all_fonts_map, 'ans', None)
     if ans is None:
         ans = all_fonts_map.ans = create_font_map(coretext_all_fonts())
@@ -40,28 +45,29 @@ def list_fonts():
             is_mono = bool(fd['monospace'])
             yield {'family': f, 'full_name': fn, 'is_monospace': is_mono}
 
-
+# ファミリ名を基準にboldとitalic指示にマッチするフォントを返す
 def find_best_match(family, bold=False, italic=False):
-    q = re.sub(r'\s+', ' ', family.lower())
+    # フォントファミリ名において連続する空白を単一の0x20に置換する
+    normalized_family = re.sub(r'\s+', ' ', family.lower())
+
+    # アクセス可能な全てのフォントについてフォントマップ(フォント情報の辞書)を生成する
     font_map = all_fonts_map()
 
     def score(candidate):
-        style_match = 1 if candidate['bold'] == bold and candidate[
-            'italic'
-        ] == italic else 0
+        style_match = 1 if candidate['bold'] == bold and candidate['italic'] == italic else 0
         monospace_match = 1 if candidate['monospace'] else 0
         return style_match, monospace_match
 
-    # First look for an exact match
+    # 最初に完全一致を探します
     for selector in ('ps_map', 'full_map'):
-        candidates = font_map[selector].get(q)
+        candidates = font_map[selector].get(normalized_family)
         if candidates:
             candidates.sort(key=score)
             return candidates[-1]
 
-    # Let CoreText choose the font if the family exists, otherwise
-    # fallback to Menlo
-    if q not in font_map['family_map']:
+    # ファミリが存在する場合はCoreTextにフォントを選択させ、そうでなければMenlo
+    # にフォールバックさせます
+    if normalized_family not in font_map['family_map']:
         log_error('The font {} was not found, falling back to Menlo'.format(family))
         family = 'Menlo'
     return {
@@ -72,6 +78,12 @@ def find_best_match(family, bold=False, italic=False):
     }
 
 
+
+# .confのフォント指定を解決する
+#
+#   フォント指定のautoとmonospaceを置き換える
+#   - auto: mediumのファミリ名に置換する
+#   - monospace: Menloに置換する
 def resolve_family(f, main_family, bold=False, italic=False):
     if (bold or italic) and f == 'auto':
         f = main_family
@@ -79,11 +91,14 @@ def resolve_family(f, main_family, bold=False, italic=False):
         f = 'Menlo'
     return f
 
-
+# optsはkitty.confに定義された値
+# - return:
+#   辞書でキーが (bold, italic) というタプル、値がfaceオブジェクト(?)
 def get_font_files(opts):
     ans = {}
-    for (bold, italic), attr in attr_map.items():
-        face = find_best_match(resolve_family(getattr(opts, attr), opts.font_family, bold, italic), bold, italic)
+    # bold, italicはbool
+    for (bold, italic), name in attr_map.items():
+        face = find_best_match(resolve_family(getattr(opts, name), opts.font_family, bold, italic), bold, italic)
         key = {(False, False): 'medium',
                (True, False): 'bold',
                (False, True): 'italic',
