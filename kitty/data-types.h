@@ -414,7 +414,8 @@ typedef struct {
     unsigned int width, height;
 } CellPixelSize;
 
-typedef struct {int x;
+typedef struct {
+    int x;
 } *SPRITE_MAP_HANDLE;
 
 #define FONTS_DATA_HEAD \

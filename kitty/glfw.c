@@ -456,13 +456,15 @@ get_window_content_scale(GLFWwindow *w, float *xscale, float *yscale, double *xd
             glfwGetMonitorContentScale(monitor, xscale, yscale);
         }
     }
-    // check for zero, negative, NaN or excessive values of xscale/yscale
+    // xscale / yscaleのゼロ、負、NaN、または過剰な値をチェックします
     if (*xscale <= 0 || *xscale != *xscale || *xscale >= 24) {
         *xscale = 1.0;
     }
     if (*yscale <= 0 || *yscale != *yscale || *yscale >= 24) {
         *yscale = 1.0;
     }
+
+    // Appleなら72DPI
 #ifdef __APPLE__
     const double factor = 72.0;
 #else
@@ -470,7 +472,7 @@ get_window_content_scale(GLFWwindow *w, float *xscale, float *yscale, double *xd
 #endif
     *xdpi = *xscale * factor;
     *ydpi = *yscale * factor;
-} /* get_window_content_scale */
+}
 
 static inline void
 get_window_dpi(GLFWwindow *w, double *x, double *y) {
@@ -604,13 +606,13 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
         return NULL;
     }
 
-    static bool is_first_window = true;
+    static bool is_first_window = true; // static...
     if (is_first_window) {
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, OPENGL_REQUIRED_VERSION_MAJOR);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, OPENGL_REQUIRED_VERSION_MINOR);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, true);
-        // We don't use depth and stencil buffers
+        // デプス、ステンシルバッファは使用しない
         glfwWindowHint(GLFW_DEPTH_BITS, 0);
         glfwWindowHint(GLFW_STENCIL_BITS, 0);
 #ifdef __APPLE__
@@ -639,11 +641,17 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
     }
     bool want_semi_transparent = (1.0 - OPT(background_opacity) >= 0.01) || OPT(dynamic_background_opacity);
     glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, want_semi_transparent);
-    // We use a temp window to avoid the need to set the window size after
-    // creation, which causes a resize event and all the associated processing.
-    // The temp window is used to get the DPI.
+
+    /*
+     * 作成後にウィンドウサイズを設定すると、サイズ変更イベントと関連するすべて
+     * の処理が発生します。
+     * これを、一時的なウィンドウを使用することで回避します。
+     * 一時ウィンドウは、DPIを取得するために使用されます。
+     */
     glfwWindowHint(GLFW_VISIBLE, false);
-    GLFWwindow *common_context = global_state.num_os_windows ? global_state.os_windows[0].handle : NULL;
+    GLFWwindow *common_context = global_state.num_os_windows ?
+                                    global_state.os_windows[0].handle :
+                                    NULL;
 #ifdef __APPLE__
     if (is_first_window && !application_quit_canary) {
         application_quit_canary = glfwCreateWindow(100, 200, "quit_canary", NULL, NULL);
@@ -656,18 +664,28 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
 
     GLFWwindow *temp_window = NULL;
     if (!global_state.is_wayland) {
-        // On Wayland windows dont get a content scale until they receive an enterEvent anyway
-        // which wont happen until the event loop ticks, so using a temp window is useless.
+        // Waylandのウィンドウは、とにかくenterEventを受け取るまでコンテンツス
+        // ケールを取得しません。
+        // これは、イベントループがカチカチ音をたてない限り発生しないため、一時
+        // ウィンドウを使用しても意味がありません。
         temp_window = glfwCreateWindow(640, 480, "temp", NULL, common_context);
         if (temp_window == NULL) {
-            fatal(
-                "Failed to create GLFW temp window! This usually happens because of old/broken OpenGL drivers. kitty requires working OpenGL 3.3 drivers.");
+            fatal("Failed to create GLFW temp window! This usually happens because of old/broken OpenGL drivers. kitty requires working OpenGL 3.3 drivers.");
         }
     }
+
+    /*
+     * TODO: これは？フォントの一覧をロードする？
+     * そのためにDPIを得る。
+     */
     float xscale, yscale;
     double xdpi, ydpi;
     get_window_content_scale(temp_window, &xscale, &yscale, &xdpi, &ydpi);
     FONTS_DATA_HANDLE fonts_data = load_fonts_data(global_state.font_sz_in_pts, xdpi, ydpi);
+
+    /*
+     * (フォントサイズが入手できたので)ウィンドウサイズを取得する
+     */
     PyObject *ret = PyObject_CallFunction(get_window_size,
                                           "IIddff",
                                           fonts_data->cell_width,
@@ -676,16 +694,24 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
                                           fonts_data->logical_dpi_y,
                                           xscale,
                                           yscale);
-    if (ret == NULL) {
+    if (!ret) {
         return NULL;
     }
-    int width = PyLong_AsLong(PyTuple_GET_ITEM(ret, 0)), height = PyLong_AsLong(PyTuple_GET_ITEM(ret, 1));
+    int width = PyLong_AsLong(PyTuple_GET_ITEM(ret, 0)),
+        height = PyLong_AsLong(PyTuple_GET_ITEM(ret, 1));
     Py_CLEAR(ret);
-    // The GLFW Wayland backend cannot create and show windows separately so we
-    // cannot call the pre_show_callback. See
-    // https://github.com/glfw/glfw/issues/1268 It doesn't matter since there
-    // is no startup notification in Wayland anyway. It amazes me that anyone
-    // uses Wayland as anything other than a butt for jokes.
+
+    /*
+     * ウィンドウを作成する
+     *  先に取得したウィンドウサイズで
+     *
+     * GLFW Waylandバックエンドはウィンドウを個別に作成および表示できないため、
+     * pre_show_callbackを呼び出すことはできません。
+     * https://github.com/glfw/glfw/issues/1268 を参照してください
+     * とにかくWaylandには起動通知がないので、それは問題ではありません。
+     * 誰もがWaylandをジョークのお尻以外のものとして使用していることに驚い
+     * ています。
+     */
     if (global_state.is_wayland) {
         glfwWindowHint(GLFW_VISIBLE, true);
     }
@@ -703,8 +729,9 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
         gl_init();
     }
     bool is_semi_transparent = glfwGetWindowAttrib(glfw_window, GLFW_TRANSPARENT_FRAMEBUFFER);
-    // blank the window once so that there is no initial flash of color
-    // changing, in case the background color is not black
+
+    // 背景色が黒でない場合に、最初の色の変化が点滅しないようにウィンドウを一度
+    // 空白にします
     blank_canvas(is_semi_transparent ? OPT(background_opacity) : 1.0f, OPT(background));
 #ifndef __APPLE__
     if (is_first_window) {
@@ -714,7 +741,7 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
     glfwSwapBuffers(glfw_window);
     if (!global_state.is_wayland) {
         PyObject *pret = PyObject_CallFunction(pre_show_callback, "N", native_window_handle(glfw_window));
-        if (pret == NULL) {
+        if (!pret) {
             return NULL;
         }
         Py_DECREF(pret);
@@ -725,20 +752,26 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
     }
     if (is_first_window) {
         PyObject *ret = PyObject_CallFunction(load_programs, "O", is_semi_transparent ? Py_True : Py_False);
-        if (ret == NULL) {
+        if (!ret) {
             return NULL;
         }
         Py_DECREF(ret);
+        /*
+         * カーソル形状設定
+         */
 #define CC(dest, shape) { \
         if (!dest ## _cursor) { \
             dest ## _cursor = glfwCreateStandardCursor(GLFW_ ## shape ## _CURSOR); \
-            if (dest ## _cursor == NULL) {log_error("Failed to create the %s mouse cursor, using default cursor.", #shape);} \
+            if (dest ## _cursor == NULL) { \
+                log_error("Failed to create the %s mouse cursor, using default cursor.", #shape); \
+            } \
         } \
 }
         CC(standard, IBEAM);
         CC(click, HAND);
         CC(arrow, ARROW);
 #undef CC
+
         if (OPT(click_interval) < 0) {
             OPT(click_interval) = glfwGetDoubleClickInterval(glfw_window);
         }
@@ -757,7 +790,8 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
     w->handle = glfw_window;
     update_os_window_references();
     for (size_t i = 0; i < global_state.num_os_windows; i++) {
-        // On some platforms (macOS) newly created windows don't get the initial focus in event
+        // macOSでは、イベントで新しく作成されたウィンドウが最初のフォーカスを
+        // 取得しません
         OSWindow *q = global_state.os_windows + i;
         q->is_focused = q == w ? true : false;
     }
@@ -778,14 +812,14 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
     }
     glfwSetCursor(glfw_window, standard_cursor);
     update_os_window_viewport(w, false);
-    // missing pos callback
-    // missing size callback
+    // posコールバックがありません
+    // sizeコールバックがありません
     glfwSetWindowCloseCallback(glfw_window, window_close_callback);
     glfwSetWindowRefreshCallback(glfw_window, refresh_callback);
     glfwSetWindowFocusCallback(glfw_window, window_focus_callback);
     glfwSetWindowOcclusionCallback(glfw_window, window_occlusion_callback);
     glfwSetWindowIconifyCallback(glfw_window, window_iconify_callback);
-    // missing maximize/restore callback
+    // maximize/restoreコールバックがありません
     glfwSetFramebufferSizeCallback(glfw_window, framebuffer_size_callback);
     glfwSetLiveResizeCallback(glfw_window, live_resize_callback);
     glfwSetWindowContentScaleCallback(glfw_window, dpi_change_callback);
@@ -819,7 +853,7 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
         }
     }
     return PyLong_FromUnsignedLongLong(w->id);
-} /* create_os_window */
+}
 
 #ifdef __APPLE__
 static inline bool

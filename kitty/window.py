@@ -63,11 +63,10 @@ def calculate_gl_geometry(window_geometry, viewport_width, viewport_height, cell
     Returns: ScreenGeometryオブジェクト
     """
 
-    dx, dy = 2 * cell_width / viewport_width, 2 * cell_height / viewport_height
+    dx, dy = cell_width / viewport_width * 2, cell_height / viewport_height * 2
     xmargin = window_geometry.left / viewport_width
     ymargin = window_geometry.top / viewport_height
-    xstart = -1 + 2 * xmargin
-    ystart = 1 - 2 * ymargin
+    xstart, ystart = -1 + xmargin * 2, 1 - ymargin * 2
     return ScreenGeometry(xstart, ystart, window_geometry.xnum, window_geometry.ynum, dx, dy)
 
 

@@ -37,12 +37,17 @@ typedef struct {
     GLint max_texture_size, max_array_texture_layers;
 } SpriteMap;
 
-static const SpriteMap NEW_SPRITE_MAP = {.xnum = 1, .ynum = 1, .last_num_of_layers = 1, .last_ynum = -1};
+static const SpriteMap NEW_SPRITE_MAP = {
+    .xnum = 1,
+    .ynum = 1,
+    .last_num_of_layers = 1,
+    .last_ynum = -1
+};
 static GLint max_texture_size = 0, max_array_texture_layers = 0;
 
 SPRITE_MAP_HANDLE
 alloc_sprite_map(unsigned int cell_width, unsigned int cell_height) {
-    if (!max_texture_size) {
+    if (max_texture_size == 0) {
         glGetIntegerv(GL_MAX_TEXTURE_SIZE, &(max_texture_size));
         glGetIntegerv(GL_MAX_ARRAY_TEXTURE_LAYERS, &(max_array_texture_layers));
 
@@ -66,7 +71,7 @@ alloc_sprite_map(unsigned int cell_width, unsigned int cell_height) {
     ans->cell_width = cell_width;
     ans->cell_height = cell_height;
     return (SPRITE_MAP_HANDLE)ans;
-} /* alloc_sprite_map */
+}
 
 SPRITE_MAP_HANDLE
 free_sprite_map(SPRITE_MAP_HANDLE sm) {

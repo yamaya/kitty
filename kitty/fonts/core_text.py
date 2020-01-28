@@ -92,8 +92,7 @@ def resolve_family(f, main_family, bold=False, italic=False):
     return f
 
 # optsはkitty.confに定義された値
-# - return:
-#   辞書でキーが (bold, italic) というタプル、値がfaceオブジェクト(?)
+# - return: 辞書。キーが (bold, italic) というタプル、値がfaceオブジェクト(?)
 def get_font_files(opts):
     ans = {}
     # bold, italicはbool

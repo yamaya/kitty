@@ -179,6 +179,23 @@ dealloc(CTFace *self) {
 
 /**
  * CTFontDescriptorをPyObjectに変換する
+ *
+ *  pythonインターフェイスにおけるフォントディスクリプタはこの関数で作られ、以
+ *  下の属性を持つ PyObject である:
+ *
+ *  - path: ファイルパス
+ *  - postscript_name: PostScript名
+ *  - family: ファミリ名
+ *  - style: スタイル
+ *  - bold: ボールドかどうか
+ *  - italic: イタリックかどうか
+ *  - monospace: モノスペースかどうか
+ *  - weight: ウェイト
+ *  - width: 幅
+ *  - traits: トレイト
+ *
+ * \param[in] descriptor CTFontDescriptorRef
+ * \return PyObject
  */
 static PyObject *
 font_descriptor_to_python(CTFontDescriptorRef descriptor) {
@@ -214,38 +231,45 @@ font_descriptor_to_python(CTFontDescriptorRef descriptor) {
 
 /**
  * PyObjectをCTFontDescriptorに変換する
+ *
+ *  PyObjectなフォントディスクリプタを元に CTFontDescriptor を生成する
+ *
+ * \param[in] src PyObject
+ * \return CTFontDescriptorRef
  */
 static CTFontDescriptorRef
 font_descriptor_from_python(PyObject *src) {
     CTFontSymbolicTraits symbolic_traits = 0;
     NSMutableDictionary *attrs = [NSMutableDictionary dictionary];
-    PyObject *t = PyDict_GetItemString(src, "traits");
 
-    // PyObjectのtraitsからCTFontSymbolicTraitsを構築する
+    // トレイト
+    PyObject *t = PyDict_GetItemString(src, "traits");
     if (!t) {
-        symbolic_traits = (
+        symbolic_traits = 
             (PyDict_GetItemString(src, "bold") == Py_True ? kCTFontBoldTrait : 0) |
             (PyDict_GetItemString(src, "italic") == Py_True ? kCTFontItalicTrait : 0) |
-            (PyDict_GetItemString(src, "monospace") == Py_True ? kCTFontMonoSpaceTrait : 0));
+            (PyDict_GetItemString(src, "monospace") == Py_True ? kCTFontMonoSpaceTrait : 0);
     }
     else {
         symbolic_traits = PyLong_AsUnsignedLong(t);
     }
-    NSDictionary *traits = @{(id)kCTFontSymbolicTrait:[NSNumber numberWithUnsignedInt:symbolic_traits]};
-    attrs[(id)kCTFontTraitsAttribute] = traits;
+    attrs[(id)kCTFontTraitsAttribute] = @{(id)kCTFontSymbolicTrait: @(symbolic_traits)};
 
-    // PyObjectからフォント名群をコピーする
-#define SET(x, attr) \
-    t = PyDict_GetItemString(src, #x); \
-    if (t) attrs[(id)attr] = @(PyUnicode_AsUTF8(t));
+    // ファミリ名
+    t = PyDict_GetItemString(src, "family");
+    if (t) attrs[(id)kCTFontFamilyNameAttribute] = @(PyUnicode_AsUTF8(t));
 
-    SET(family, kCTFontFamilyNameAttribute);
-    SET(style, kCTFontStyleNameAttribute);
-    SET(postscript_name, kCTFontNameAttribute);
-#undef SET
+    // スタイル
+    t = PyDict_GetItemString(src, "style");
+    if (t) attrs[(id)kCTFontStyleNameAttribute] = @(PyUnicode_AsUTF8(t));
 
+    // ポストスクリプト名
+    t = PyDict_GetItemString(src, "postscript_name");
+    if (t) attrs[(id)kCTFontNameAttribute] = @(PyUnicode_AsUTF8(t));
+
+    // CTFontDescriptorを生成する
     return CTFontDescriptorCreateWithAttributes((CFDictionaryRef)attrs);
-} /* font_descriptor_from_python */
+}
 
 /**
  * CTFontCollectionオブジェクト
@@ -253,6 +277,11 @@ font_descriptor_from_python(PyObject *src) {
  */
 static CTFontCollectionRef all_fonts_collection_data = NULL;
 
+/**
+ * 使用可能な全てのフォントをコレクションで得る
+ *
+ * \return CTFontCollectionRef
+ */
 static CTFontCollectionRef
 all_fonts_collection() {
     if (!all_fonts_collection_data) {
@@ -264,7 +293,7 @@ all_fonts_collection() {
 /**
  * 全フォントを取得する
  *
- * @return (font_descriptor_to_pythonで構築された)フォント情報のnタプル
+ * \return (font_descriptor_to_pythonで構築された)フォント情報のnタプル
  */
 static PyObject *
 coretext_all_fonts(PyObject UNUSED *_self) {
@@ -357,7 +386,7 @@ manually_search_fallback_fonts(CTFontRef current_font, CPUCell *cell) {
         }
     }
     return ans;
-} /* manually_search_fallback_fonts */
+}
 
 /**
  * 指定された文字列に割当てられた代替フォントを探す

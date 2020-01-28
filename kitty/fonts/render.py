@@ -22,8 +22,12 @@ if is_macos:
 else:
     from .fontconfig import get_font_files, font_for_family
 
+# フォント情報のリスト
+#   要素は (フォント情報, bold有無, italic有無) というタプルである
+#
+# これなんだろ？フォント名が欲しいがためのデータセットなのか？
+# 意図がよーわからん
 current_faces = None
-
 
 # シンボルマップの結合
 def coalesce_symbol_maps(maps):
@@ -98,8 +102,6 @@ def set_font_family(opts=None, override_font_size=None, debug_font_matching=Fals
 
     # medium, bold, italic, boldItalicを用意する(単にスロットを用意しているだけ)
     current_faces = [(font_map['medium'], False, False)] // style, bold有無, italic有無
-        # current_facesってなんだろ？フォント名が欲しいがためのデータセットなのか？
-        # 意図がよーわからん
     ftypes = 'bold italic bi'.split() # [bold, italic, boldItalic]
 
     # indicesの内容:
